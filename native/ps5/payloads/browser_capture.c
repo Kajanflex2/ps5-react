@@ -54,7 +54,7 @@ int main(void) {
   signal(SIGPIPE, SIG_IGN);
   if (!line(magic, sizeof magic) || strcmp(magic, "BRC1") || !line(prefix, sizeof prefix) ||
       strcmp(prefix, "https://vikingfile.com/d/") || !line(suffix, sizeof suffix) ||
-      suffix[0] != '/' || !suffix[1] || !line(seconds, sizeof seconds)) return fail("Invalid capture request.");
+      suffix[0] != '/' || !line(seconds, sizeof seconds)) return fail("Invalid capture request.");
   const char *filename = suffix + 1;
   if (strchr(filename, '/') || strchr(filename, '\\') || strstr(filename, "..")) return fail("Invalid filename.");
   char *end;

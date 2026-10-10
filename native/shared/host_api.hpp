@@ -52,7 +52,7 @@
 //                                  a decoder-memory refusal its headers so far justify; partial files ok
 //   archives.cancel(id)            requests cancellation; source volumes remain intact
 //   archives.poll()                state/error/written/entries/artifacts; consumes terminal results
-//   browser.capture(prefix, suffix, timeoutSeconds) ABI v7; filename-bound Vikingfile capture task
+//   browser.capture(prefix, suffix, timeoutSeconds) ABI v7; Vikingfile capture task bound to a filename, or to any file when suffix is "/"
 //   browser.cancel(id)            stops the read-only payload by closing its connection
 //   browser.poll()                state/error/url; consumes terminal results
 //   packages.install(path, name)   task ID; installs a .pkg under /data, /mnt/usb or /mnt/ext through the

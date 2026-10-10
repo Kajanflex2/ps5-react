@@ -22,6 +22,13 @@ int main(void) {
   BrowserMatch match = {.filename = "Game DLC.pkg"};
   assert(browser_capture_url(match.filename, url));
   assert(!browser_capture_url("Other.pkg", url));
+  assert(browser_capture_url("", url));
+  assert(browser_capture_url("Game DLC.pkg", "https://vik1ngfile.site/d/Ab01234567/Game%20DLC.pkg"));
+  assert(!browser_capture_url("Game DLC.pkg", "https://vik1ngfile.site.evil.test/d/Ab01234567/Game%20DLC.pkg"));
+  assert(!browser_capture_url("", "https://vikingfile.com/d/Ab01234567/"));
+  assert(!browser_capture_url("", "https://vikingfile.com/d/Ab01234567/a%2Fb.rar"));
+  assert(!browser_capture_url("", "https://vikingfile.com/d/Ab01234567/a%5Cb.rar"));
+  assert(!browser_capture_url("", "https://vikingfile.com/d/Ab01234567/a%0Ab.rar"));
   assert(!browser_capture_url(match.filename, "https://vikingfile.com.evil.test/d/Ab01234567/Game%20DLC.pkg"));
   assert(!browser_capture_url(match.filename, "https://vikingfile.com/d/Ab01234567/Game%20DLC.pkg?x=1"));
   Memory memory = {.length = 3 * PROBE_CHUNK};
@@ -48,9 +55,10 @@ int main(void) {
   match.filename = "G_02225(v02.024)-[DLPSGAME.COM].rar";
   const char *real_name_routes[] = {
     "https://vikingfile.com/d/Ab01234567/G_02225(v02.024)-[DLPSGAME.COM].rar",
-    "https://vikingfile.com/d/Ab01234567/G_02225%28v02.024%29-%5BDLPSGAME.COM%5D.rar"
+    "https://vikingfile.com/d/Ab01234567/G_02225%28v02.024%29-%5BDLPSGAME.COM%5D.rar",
+    "https://vik1ngfile.site/d/Ab01234567/G_02225%28v02.024%29-%5BDLPSGAME.COM%5D.rar"
   };
-  for (size_t route = 0; route < 2; route++) {
+  for (size_t route = 0; route < 3; route++) {
     for (size_t step = 1; step <= 2; step++) {
       memset(memory.bytes, 0, memory.length);
       const char *candidate = real_name_routes[route];

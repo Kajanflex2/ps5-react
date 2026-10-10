@@ -20,7 +20,7 @@ JSValue capture(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   std::string prefix, suffix;
   double timeout = 0;
   if (argc < 3 || !text(ctx, argv[0], prefix) || prefix != "https://vikingfile.com/d/" ||
-      !text(ctx, argv[1], suffix) || suffix.size() < 2 || suffix[0] != '/' ||
+      !text(ctx, argv[1], suffix) || suffix.empty() || suffix[0] != '/' ||
       suffix.find('/', 1) != std::string::npos || suffix.find('\\') != std::string::npos ||
       suffix.find("..") != std::string::npos || JS_ToFloat64(ctx, &timeout, argv[2]) ||
       !std::isfinite(timeout) || timeout < 1 || timeout > 180 || std::floor(timeout) != timeout)
