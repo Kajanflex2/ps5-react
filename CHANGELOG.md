@@ -2,6 +2,10 @@
 
 ## Unreleased — cheaper mounts
 
+- `motion` elements run two effects each instead of six and add a context provider only
+  when they pass new variant labels down. Their animations now start in a microtask after the
+  commit, still before the frame paints, instead of in a passive effect each. Mounting a
+  `motion.View` costs about a fifth less JavaScript.
 - Patch Embedded React's QuickJS bridge (`patches/embeddedReact-host-props-cost.patch`) so a host
   element copies only the props it was given and a plain style object is not re-flattened.
 - The frame-time log splits `present` into `upload` and `draw` and reports the kilobytes uploaded

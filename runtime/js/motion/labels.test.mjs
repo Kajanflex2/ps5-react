@@ -102,7 +102,11 @@ function renderer({Reconciler}) {
       reconciler.updateContainer(element, root, null, null);
       reconciler.flushPassiveEffects();
     },
-    flush() { reconciler.flushPassiveEffects(); },
+    // Animations start in a microtask after the commit (motion.js applyAfterCommit).
+    async flush() {
+      reconciler.flushPassiveEffects();
+      await Promise.resolve();
+    },
   };
 }
 
@@ -135,7 +139,7 @@ test('a label change re-renders only the motion elements that use the labels', a
 
   view.commits.length = 0;
   setLabel('b');
-  view.flush();
+  await view.flush();
   assert.equal(opacity(view.nodes.get('follows')), 0.75);
   assert.equal(opacity(view.nodes.get('nested')), 0.75, 'labels pass through an element without variants');
   const rendered = view.commits.reduce((sum, count) => sum + count, 0);

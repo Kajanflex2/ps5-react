@@ -3,8 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // motion.* components: props describe targets, the engine animates them, React renders once per
 // target change rather than per frame.
-import {createContext, createElement, forwardRef, useContext, useEffect, useLayoutEffect, useReducer, useRef,
-  useState} from 'react';
+import {createContext, createElement, forwardRef, useContext, useLayoutEffect, useReducer, useRef, useState}
+  from 'react';
 import {View} from 'embedded-react';
 import {FOCUS_PROPS, isFocusable, resolveStyle, useFocusNode} from '../focus/focusable.js';
 import {NodeContext} from '../focus/runtime.js';
@@ -31,20 +31,26 @@ const MotionContext = createContext(null);
 
 const isLabel = definition => typeof definition === 'string' || Array.isArray(definition);
 
-/** Re-renders the caller when `channel`'s labels change, while `follow`. @param {Channel | null} channel */
-function useLabels(channel, follow) {
-  const [, rerender] = useReducer(count => count + 1, 0);
-  const seen = useRef(undefined);
-  seen.current = channel?.labelKey;
-  useLayoutEffect(() => {
-    if (!channel || !follow) return undefined;
-    const listener = () => {
-      if (channel.labelKey !== seen.current) rerender();
-    };
-    channel.listeners.add(listener);
-    listener();
-    return () => { channel.listeners.delete(listener); };
-  }, [channel, follow]);
+/** Re-renders `self` when `channel`'s labels change from those it last rendered with. @returns the unsubscribe */
+function followLabels(self, channel) {
+  const listener = () => {
+    if (channel.labelKey !== self.seenLabels) self.rerender();
+  };
+  channel.listeners.add(listener);
+  listener();
+  return () => { channel.listeners.delete(listener); };
+}
+
+// Elements whose animations start once the current commit is done; one microtask runs them all.
+const pendingApplies = new Map();
+function applyAfterCommit(self, apply) {
+  if (!pendingApplies.size) Promise.resolve().then(runApplies);
+  pendingApplies.set(self, apply);
+}
+function runApplies() {
+  const due = [...pendingApplies];
+  pendingApplies.clear();
+  for (const [self, apply] of due) if (!self.disposed && self.alive) apply();
 }
 
 function useMotion(props) {
@@ -53,13 +59,19 @@ function useMotion(props) {
   const parent = useContext(MotionContext);
   const presence = useContext(PresenceContext);
   const state = useRef(null);
-  if (!state.current) state.current = {values: null, mounted: false, animateKey: undefined, animatePending: null};
+  const [, rerender] = useReducer(count => count + 1, 0);
+  if (!state.current) {
+    state.current = {values: null, mounted: false, animateKey: undefined, animatePending: null, rerender,
+      seenLabels: undefined, alive: false, followed: null, unfollow: null, announced: undefined};
+  }
   const self = state.current;
 
   const inherited = animate === undefined;
-  const controlling = [initial, animate, exit, whileFocus, whileSelect, whilePress].some(isLabel);
+  const controlling = isLabel(initial) || isLabel(animate) || isLabel(exit) || isLabel(whileFocus)
+    || isLabel(whileSelect) || isLabel(whilePress);
   // Inherited labels matter to an element that resolves them against its variants, or passes them on.
-  useLabels(parent, inherited && (variants !== undefined || controlling));
+  const follow = inherited && (variants !== undefined || controlling);
+  self.seenLabels = parent?.labelKey;
   const exiting = presence ? !presence.isPresent : false;
   const keys = collectKeys([initial, animate, exit, whileFocus, whileSelect, whilePress], variants);
   const layers = [
@@ -107,27 +119,38 @@ function useMotion(props) {
   channel.labels = labels;
   channel.labelKey = labelKey;
   channel.initial = childInitial;
-  useLayoutEffect(() => {
-    for (const listener of [...channel.listeners]) listener();
-  }, [labelKey]);
+  const followed = follow ? parent : null;
 
   const complete = useRef(onAnimationComplete);
   complete.current = onAnimationComplete;
   const parentRegistry = parent?.registry;
+  // Joining the parent's stagger order and its presence share one effect, which also releases the
+  // element: React commits (and on unmount tears down) every effect of every element, which for a
+  // screen of cards was a large part of mounting it. The values are released only once the element
+  // is gone, not when the parent's registry or presence changes under it.
   useLayoutEffect(() => {
-    if (!parentRegistry) return undefined;
-    parentRegistry.order.push(self);
-    return () => { parentRegistry.order.splice(parentRegistry.order.indexOf(self), 1); };
-  }, [parentRegistry]);
-  useLayoutEffect(() => presence?.register(self), [presence]);
-  useEffect(() => () => {
-    self.disposed = true;
-    self.values?.dispose();
-  }, []);
+    self.alive = true;
+    parentRegistry?.order.push(self);
+    const leavePresence = presence?.register(self);
+    return () => {
+      if (parentRegistry) parentRegistry.order.splice(parentRegistry.order.indexOf(self), 1);
+      leavePresence?.();
+      // Unfollowed now; the per-render effect follows again if this was only a dependency change.
+      self.unfollow?.();
+      self.unfollow = null;
+      self.followed = undefined;
+      self.alive = false;
+      Promise.resolve().then(() => {
+        if (self.alive || self.disposed) return;
+        self.disposed = true;
+        self.values?.dispose();
+      });
+    };
+  }, [parentRegistry, presence]);
 
   const animateDefinition = inherited ? parent?.labels : animate;
   const animateKey = JSON.stringify(animateDefinition ?? null);
-  useEffect(() => {
+  const apply = () => {
     self.mounted = true;
     self.exiting = exiting;
     self.presence = presence;
@@ -158,6 +181,22 @@ function useMotion(props) {
       targets[key] = {value, transition: transitionFor(own ?? transition, key), delay: fromParent ? delay : 0};
     }
     self.values.apply(targets, finish);
+  };
+  // One effect per render does what this element needs after its commit: follow the parent's labels
+  // and announce its own when they changed, and start its animations. Those start in a microtask after
+  // the commit (applyAfterCommit), when every sibling has joined the stagger order; a passive effect
+  // per element did that before, and React's pass over them was a large part of mounting a screen.
+  useLayoutEffect(() => {
+    if (followed !== self.followed) {
+      self.unfollow?.();
+      self.unfollow = followed ? followLabels(self, followed) : null;
+      self.followed = followed;
+    }
+    if (labelKey !== self.announced) {
+      self.announced = labelKey;
+      for (const listener of [...channel.listeners]) listener();
+    }
+    applyAfterCommit(self, apply);
   });
 
   return {bound, flat, context: controlling ? channel : parent, consumedPresence: presence !== null};
@@ -180,6 +219,8 @@ export function createMotion(Component, {wrapOpacity = false} = {}) {
     const focused = props.focused ?? focus?.focused;
     const pressed = props.pressed ?? focus?.pressed;
     const ownStyle = resolveStyle(props.style, !!focused, !!pressed);
+    const parentChannel = useContext(MotionContext);
+    const provides = useRef(false);
     const {bound, flat, context, consumedPresence} = useMotion({...props, focused, pressed, style: ownStyle});
     const rest = {ref};
     for (const key in props) if (!MOTION_PROPS.includes(key) && !FOCUS_PROPS.includes(key)) rest[key] = props[key];
@@ -193,7 +234,10 @@ export function createMotion(Component, {wrapOpacity = false} = {}) {
       element = createElement(Component, {...rest, style: ownStyle});
     }
     if (focus) element = createElement(NodeContext.Provider, {value: focus.node}, element);
-    element = createElement(MotionContext.Provider, {value: context}, element);
+    // An element that only passes its parent's channel on adds no provider (a fiber less per element).
+    // Once it has provided its own, it keeps the provider: adding or dropping it would remount the subtree.
+    if (context !== parentChannel) provides.current = true;
+    if (provides.current) element = createElement(MotionContext.Provider, {value: context}, element);
     return consumedPresence ? createElement(PresenceContext.Provider, {value: null}, element) : element;
   });
   MotionComponent.displayName = `motion(${typeof Component === 'string' ? Component
