@@ -2,6 +2,8 @@
 
 ## Unreleased — cheaper mounts
 
+- Patch Embedded React's QuickJS bridge (`patches/embeddedReact-host-props-cost.patch`) so a host
+  element copies only the props it was given and a plain style object is not re-flattened.
 - The frame-time log splits `present` into `upload` and `draw` and reports the kilobytes uploaded
   per frame (docs/ANIMATION.md).
 

@@ -107,6 +107,9 @@ alignment.
 `embeddedReact-text-clip.patch` (Apache-2.0 engine and bridge files; not yet
 proposed upstream) adds `er_utf8_clip()` and clips Text, TextInput and span
 strings at a character boundary rather than a byte count.
+`embeddedReact-host-props-cost.patch` (Apache-2.0 bridge files; not yet
+proposed upstream) makes a host element copy only the props it was given and
+skips re-flattening a style that is already a plain object.
 Patches apply in the order the lock lists them, and may add files.
 
 `tools/bundle.mjs` adapts upstream Apache-2.0 tooling and preserves its notice.
