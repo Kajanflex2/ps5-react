@@ -263,6 +263,18 @@ int main() {
   initialize_filesystem_access();
   expect_path("/app0/eboot.bin", "/system_ex/app/PPSA99058/eboot.bin");
 
+  // Without a resolvable descriptor, /system_ex/app/<TITLE> matching /app0's identity is the app root.
+  reset(true);
+  fixture::inodes = {{"/app0", 1}};
+  fixture::elevate = [] {
+    fixture::directories = {{"/data", true}, {"/mnt", false}, {"/mnt/sandbox", false},
+                            {"/mnt/sandbox/PPSA99058_000", false}, {"/mnt/sandbox/PPSA99058_000/app0", false},
+                            {"/system_ex", false}, {"/system_ex/app", false}, {"/system_ex/app/PPSA99058", false}};
+    fixture::inodes = {{"/system_ex/app/PPSA99058", 1}};
+  };
+  initialize_filesystem_access();
+  expect_path("/app0/x", "/system_ex/app/PPSA99058/x");
+
   // Nothing to verify keeps the old guess.
   reset(true);
   fixture::directories.erase("/app0");

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
+#include <initializer_list>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -191,10 +192,12 @@ void sandbox_root(const char* name, const Before& before, char* out, std::size_t
       return;
     }
   }
-  if (app) {
-    consider("/system_ex/app/" PS5_REACT_TITLE);
-    consider("/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0");
-  }
+  if (app)
+    for (const char* candidate : {"/system_ex/app/" PS5_REACT_TITLE, "/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0"})
+      if (consider(candidate)) {
+        std::snprintf(out, size, "%s", candidate);
+        return;
+      }
   if (*newest) {
     std::snprintf(out, size, "%s", newest);
   } else {
