@@ -462,6 +462,15 @@ struct Host {
       std::printf("[PS5-REACT] %s\n", line);
       std::fflush(stdout);
     }
+    if (const int hz = ps5_react_take_refresh_request()) {
+      // The preview keeps the monitor's rate, but rebuilds the presenter as the PS5 host must, so that
+      // path runs here too, and reports the requested rate as the one the display accepted.
+      presenter.release();
+      if (!presenter.init(width, height)) return false;
+      ps5_react_set_refresh_rate(hz);
+      std::printf("[PS5-REACT] refresh switch to %d Hz (the preview keeps the monitor's rate)\n", hz);
+      std::fflush(stdout);
+    }
     // The PS5 host prints this with its memory line; here every two seconds while it changes.
     if (SDL_TICKS_PASSED(now, next_image_stats)) {
       next_image_stats = now + 2000;

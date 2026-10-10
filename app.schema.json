@@ -87,6 +87,18 @@
       "default": 60,
       "description": "Display refresh in Hz. 120 needs a display with 120 Hz input; others stay at 60."
     },
+    "refreshRates": {
+      "type": "array",
+      "items": {
+        "enum": [
+          60,
+          120
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1,
+      "description": "Rates Display.setRefreshRate may switch to while the app runs; must include refreshRate. Defaults to refreshRate alone."
+    },
     "filesystemAccess": {
       "type": "string",
       "enum": [

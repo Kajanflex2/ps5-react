@@ -12,6 +12,7 @@
     "width": 1920,
     "height": 1080
   },
+  "refreshRates": [60, 120],
   "timeoutSeconds": 0,
   "filesystemAccess": "console"
 }

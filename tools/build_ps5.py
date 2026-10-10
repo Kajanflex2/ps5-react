@@ -16,7 +16,7 @@ import urllib.request
 import zipfile
 
 from rar_worker import build as build_rar_worker, unrar_source
-from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
+from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image, refresh_rate_mask
 from network_ports import ports, copy_notices
 import ffmpeg
 from text_fonts import harfbuzz, sheenbidi
@@ -246,7 +246,7 @@ def main():
     shutil.copy2(relauncher, app / "relauncher.elf")
     shutil.copy2(capture, app / "browser-capture.elf")
     param = json.loads((hui / "sce_sys/param.json").read_text())
-    if config.get("refreshRate", 60) == 120:
+    if refresh_rate_mask(config) & 2:
         param["attribute3"] = param.get("attribute3", 0) | 0x80040  # The console grants 120 Hz output only with these bits.
     if config.get("video"):
         # The most the console gives (from the default 448 MiB); the rest comes out of direct memory.

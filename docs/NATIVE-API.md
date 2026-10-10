@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v10) is
+each host installs before the bundle runs. Its exact shape (ABI v11) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -306,6 +306,29 @@ player's id and the name of the placeholder image its `<Image layer>` draws, `vi
 setters for pause, seek, volume, mute, loop, resize mode, audio delay, audio and subtitle track,
 `video.addSubtitle(id, source, language, title)` for a subtitle file, and `video.poll()`, every open
 player's status, read each frame while one is open. Apps use the component.
+
+## Display
+
+`Display.refreshRate()` returns the rate in Hz the display presents at.
+`Display.setRefreshRate(hz)` (ABI v11) switches between 60 and 120 Hz while the
+app runs, for example 120 Hz for film playback, where 24 fps divides evenly,
+and 60 Hz for a heavy interface. The rate must be listed in app.json
+`"refreshRates"`; any other throws.
+
+The switch happens after the current frame. The PS5 host can change the rate
+only while EGL is shut down, so it releases the presenter, closes and reopens
+the display at the new rate, and builds the presenter again. JavaScript state,
+React and the engine's framebuffer live in CPU memory and are kept; the first
+frame afterwards uploads the whole framebuffer. The screen is black while the
+TV resyncs, a second or two, and motion does not advance across that gap. A TV
+without 120 Hz input stays at 60, and `refreshRate()` reports the accepted mode
+once a frame has been presented at it. Asking for the current rate cancels a
+switch that has not happened yet.
+
+The desktop preview keeps the monitor's rate, rebuilds its presenter the same
+way, reports the requested rate and prints
+`[PS5-REACT] refresh switch to <hz> Hz`. **Not yet validated on hardware**: no
+console has switched rates at runtime yet.
 
 ## Fonts
 

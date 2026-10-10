@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
+#include "app_config.hpp"
 #include "text_shaper.hpp"
 
 extern "C" {
@@ -18,10 +19,12 @@ extern "C" {
 #include <ctime>
 #include <iterator>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
 bool exit_requested = false;
+int refresh_rate = PS5_REACT_REFRESH_RATE, refresh_request = 0;
 GamepadState gamepad;
 
 // A JS path argument and its platform path; frees the JS string on scope exit.
@@ -386,6 +389,22 @@ JSValue power_keep_awake(JSContext* ctx, JSValueConst, int, JSValueConst* argv) 
   return JS_UNDEFINED;
 }
 
+JSValue display_refresh_rate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+  return JS_NewInt32(ctx, refresh_rate);
+}
+
+JSValue display_set_refresh_rate(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  std::int32_t hz = 0;
+  if (JS_ToInt32(ctx, &hz, argv[0])) return JS_EXCEPTION;
+  const int bit = hz == 60 ? 1 : hz == 120 ? 2 : 0;
+  if (!bit) return JS_ThrowRangeError(ctx, "display.setRefreshRate: 60 or 120 Hz; got %d", hz);
+  if (!(PS5_REACT_REFRESH_RATES & bit))
+    return JS_ThrowTypeError(ctx, "display.setRefreshRate: %d Hz is not in app.json \"refreshRates\"", hz);
+  // Asking for the current rate cancels a switch that has not happened yet.
+  refresh_request = hz == refresh_rate ? 0 : hz;
+  return JS_UNDEFINED;
+}
+
 JSValue text_set_language(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   const char* tag = JS_ToCString(ctx, argv[0]);
   if (!tag) return JS_EXCEPTION;
@@ -472,6 +491,7 @@ constexpr Function kPad[] = {
   {"state", pad_state, 0},
 };
 constexpr Function kPower[] = {{"keepAwake", power_keep_awake, 1}};
+constexpr Function kDisplay[] = {{"refreshRate", display_refresh_rate, 0}, {"setRefreshRate", display_set_refresh_rate, 1}};
 constexpr Function kText[] = {{"setLanguage", text_set_language, 1}};
 constexpr Function kRoot[] = {{"notify", notify, 2}, {"openURL", open_url, 1}, {"exit", request_exit, 1}};
 } // namespace
@@ -488,6 +508,7 @@ void ps5_react_install_host_api(JSContext* ctx) {
   JS_SetPropertyStr(ctx, api, "users", namespace_object(ctx, "users", kUsers));
   JS_SetPropertyStr(ctx, api, "pad", namespace_object(ctx, "pad", kPad));
   JS_SetPropertyStr(ctx, api, "power", namespace_object(ctx, "power", kPower));
+  JS_SetPropertyStr(ctx, api, "display", namespace_object(ctx, "display", kDisplay));
   JS_SetPropertyStr(ctx, api, "text", namespace_object(ctx, "text", kText));
   JS_SetPropertyStr(ctx, api, "network", ps5_react_network_api(ctx));
   JS_SetPropertyStr(ctx, api, "archives", ps5_react_archive_api(ctx));
@@ -504,6 +525,14 @@ void ps5_react_install_host_api(JSContext* ctx) {
 
 bool ps5_react_exit_requested() {
   return exit_requested;
+}
+
+void ps5_react_set_refresh_rate(int hz) {
+  refresh_rate = hz;
+}
+
+int ps5_react_take_refresh_request() {
+  return std::exchange(refresh_request, 0);
 }
 
 void ps5_react_set_gamepad(const GamepadState& state) {

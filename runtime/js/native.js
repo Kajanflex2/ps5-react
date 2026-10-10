@@ -194,6 +194,22 @@ export const Power = {
   keepAwake: enabled => host().power.keepAwake(Boolean(enabled)),
 };
 
+export const Display = {
+  /**
+   * The rate in Hz the display presents at. On the PS5 it is the mode the TV accepted, known after
+   * the first frame at a rate: a TV without 120 Hz input stays at 60.
+   * @returns {60 | 120}
+   */
+  refreshRate: () => host().display.refreshRate(),
+  /**
+   * Switches the display to 60 or 120 Hz after this frame. The rate must be listed in app.json
+   * "refreshRates". On the PS5 the screen goes black for a second or two while the TV resyncs;
+   * app state is kept. The desktop preview keeps the monitor's rate and reports the requested one.
+   * @param {60 | 120} hz
+   */
+  setRefreshRate: hz => host().display.setRefreshRate(hz),
+};
+
 export const Fonts = {
   /**
    * The interface language, as a BCP 47 tag ('ja', 'zh-Hans', 'ar'), for text drawn from the

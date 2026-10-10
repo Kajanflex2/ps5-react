@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v10) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v11) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -41,6 +41,10 @@
 //   pad.state()                    {connected, leftX, leftY, rightX, rightY, l2, r2, buttons}
 //   power.keepAwake(enabled)       ABI v4; while true, the console does not enter rest mode
 //                                  for inactivity (the desktop display does not sleep)
+//   display.refreshRate()          ABI v11; the rate in Hz the display presents at; on the PS5 the mode
+//                                  the TV accepted, known after the first frame at that rate
+//   display.setRefreshRate(hz)     ABI v11; 60 or 120, listed in app.json "refreshRates"; the host
+//                                  switches after this frame (PS5: restarts EGL, the TV resyncs)
 //   network.download(url, path, options) task ID; queues native binary file I/O
 //     options: expectedBytes, storageRoot, pieces[{url, offset, size, sha1}],
 //              sha256, connections, adaptive, rangeBytes, resume, recoverCompleted, headers, rejectHtml
@@ -123,6 +127,10 @@ constexpr std::size_t kMaxReadBytes = 8 * 1024 * 1024;
 // Shared (host_api.cpp).
 void ps5_react_install_host_api(JSContext* ctx);
 bool ps5_react_exit_requested();
+// ABI v11: the host reports the rate it presents at, and after each frame takes the rate
+// display.setRefreshRate asked for, 0 when there is none, to switch to before the next one.
+void ps5_react_set_refresh_rate(int hz);
+int ps5_react_take_refresh_request();
 // Calls `globalThis.__ps5ReactFrame(elapsedMs)` (runtime/js/frame.js) once per frame, after
 // er_runtime_pump() and before er_commit(): per-frame motion steps by the time the frame advances
 // on screen. False when it threw.

@@ -257,6 +257,21 @@ bool dispatch(const char* action) {
   return ok;
 }
 
+// Display.setRefreshRate: the rate can change only while EGL is terminated (ps5_opengl_display_modes.h),
+// so the presenter's GL objects go with the context and are made again. The engine framebuffer is CPU
+// memory and survives; the presenter's first draw uploads all of it.
+bool switch_refresh_rate(hui::ps5::Display& display, GlPresenter& presenter, int hz) {
+  const std::int64_t start = hui::sys::monotonic_us();
+  presenter.release();
+  display.close();
+  if (!eglSetDisplayRefreshPS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), hz))
+    async_log::write("[PS5-REACT] refresh %d Hz refused: 0x%x", hz, eglGetError());
+  const bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT) && presenter.init(width, height);
+  async_log::write("[PS5-REACT] refresh switch to %d Hz ok=%d in %lldms", hz, ok,
+                   static_cast<long long>((hui::sys::monotonic_us() - start) / 1000));
+  return ok;
+}
+
 // Owned resources are released while the context is valid; closing the title
 // happens after this scope, through the platform's lifecycle API.
 bool run_proof() {
@@ -360,8 +375,9 @@ bool run_proof() {
     // Input failure is logged; timeout still allows the display-only proof to end.
     async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us(), last_vblank_us = previous;
-    // Replaced by the accepted mode after the first frame: a display without 120 Hz stays at 60.
+    // Replaced by the accepted mode after the first frame at a rate: a display without 120 Hz stays at 60.
     int refresh_hz = PS5_REACT_REFRESH_RATE;
+    bool mode_known = false;
     double tick_carry_ms = 0;
     std::uint64_t frames = 0;
     InputScript script;
@@ -502,12 +518,17 @@ bool run_proof() {
         first_present = hui::sys::monotonic_us();
         hui::sys::hide_splash_screen();
         async_log::write("[PS5-REACT] first frame presented at %lldms", since_launch_ms());
+      }
+      const bool first_at_mode = !mode_known;
+      if (first_at_mode) {
         // The accepted mode is known only once a frame has been presented.
+        mode_known = true;
         EGLint mode_width = 0, mode_height = 0, mode_hz = 0;
         if (eglGetDisplayModePS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), &mode_width, &mode_height, &mode_hz)) {
           async_log::write("[PS5-REACT] display mode %dx%d at %d Hz", mode_width, mode_height, mode_hz);
           if (mode_hz > 0) refresh_hz = mode_hz;
         }
+        ps5_react_set_refresh_rate(refresh_hz);
       }
       // The engine clock takes whole milliseconds; carrying the remainder keeps 8.33 ms frames at speed.
       tick_carry_ms += std::min(elapsed_ms, 50.0);
@@ -515,9 +536,18 @@ bool run_proof() {
       tick_carry_ms -= tick_ms;
       embedded_renderer_tick(tick_ms);
       previous = now;
+      // The first frame at a mode may wait out the TV's resync in its swap; that wait is not motion.
+      if (first_at_mode) previous = hui::sys::monotonic_us();
       ++frames;
       if (const char* line = stats.end_frame(slow_frame_us)) async_log::write("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
+      if (const int hz = ps5_react_take_refresh_request()) {
+        ok = switch_refresh_rate(display, presenter, hz);
+        refresh_hz = hz;
+        mode_known = false;
+        // Nor is the reopen itself.
+        previous = hui::sys::monotonic_us();
+      }
     }
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
     if (profiler.running()) {

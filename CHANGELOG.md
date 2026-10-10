@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — runtime refresh rate
+
+- Add `Display.refreshRate()` and `Display.setRefreshRate(hz)` (native ABI v11): an app switches
+  between 60 and 120 Hz while it runs, among the rates app.json `"refreshRates"` lists. The PS5 host
+  reopens the display at the new rate between frames and rebuilds the presenter; app state is kept,
+  the TV resyncs. The desktop preview rebuilds its presenter and keeps the monitor's rate. Not yet
+  validated on a PS5.
+
 ## Unreleased — fixes
 
 - The glyph cache unlinked its oldest glyph from the wrong end of its recently-used list, so

@@ -162,6 +162,12 @@ def app_config(app, config=None):
     refresh = config.get("refreshRate", 60)
     if type(refresh) is not int or refresh not in (60, 120):
         raise ValueError("refreshRate must be 60 or 120")
+    rates = config.get("refreshRates", [refresh])
+    if (not isinstance(rates, list) or len(set(rates)) != len(rates)
+            or any(type(rate) is not int or rate not in (60, 120) for rate in rates)):
+        raise ValueError("refreshRates must list distinct rates from 60 and 120")
+    if refresh not in rates:
+        raise ValueError(f"refreshRates must include the starting refreshRate {refresh}")
     if type(config["timeoutSeconds"]) is not int or not 0 <= config["timeoutSeconds"] <= 3600:
         raise ValueError("timeoutSeconds must be 0 (disabled) or 1..3600")
     if not config["name"].strip() or len(config["name"]) > 80:
@@ -185,11 +191,18 @@ def app_config(app, config=None):
     return app, config
 
 
+def refresh_rate_mask(config):
+    """The rates Display.setRefreshRate may switch to: bit 0 for 60 Hz, bit 1 for 120 Hz."""
+    rates = config.get("refreshRates", [config.get("refreshRate", 60)])
+    return (1 if 60 in rates else 0) | (2 if 120 in rates else 0)
+
+
 def generated_config(config, directory):
     directory.mkdir(parents=True, exist_ok=True)
     definitions = {"WIDTH": config["render"]["width"], "HEIGHT": config["render"]["height"],
                    "SURFACE_WIDTH": config["surface"]["width"], "SURFACE_HEIGHT": config["surface"]["height"],
                    "TIMEOUT": config["timeoutSeconds"], "REFRESH_RATE": config.get("refreshRate", 60),
+                   "REFRESH_RATES": refresh_rate_mask(config),
                    "NAME": config["name"], "TITLE": config["titleId"],
                    "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console"),
                    "NETWORKING": int(config.get("networking", False)),
