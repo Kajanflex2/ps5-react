@@ -5,8 +5,11 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
+#include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -52,6 +55,49 @@ int mkdir(const char* path, mode_t) {
   return 0;
 }
 pid_t getpid() { return 123; }
+
+// A directory's identity is its path unless `inodes` names it, so two paths can be one directory
+// seen from the sandbox's root and from the console's.
+std::map<std::string, ino_t> inodes;
+std::map<std::string, time_t> mtimes;
+std::function<void()> elevate;
+int stat_path(const char* path, struct stat* out) {
+  const std::string name = path;
+  *out = {};
+  if (directories.contains(name)) {
+    out->st_mode = S_IFDIR;
+    out->st_ino = inodes.contains(name) ? inodes.at(name) : std::hash<std::string>{}(name);
+  } else if (files.contains(name)) {
+    out->st_mode = S_IFREG;
+    out->st_mtime = mtimes.contains(name) ? mtimes.at(name) : 0;
+  } else {
+    errno = ENOENT;
+    return -1;
+  }
+  out->st_dev = 1;
+  return 0;
+}
+struct Listing {
+  std::set<std::string> names;
+  std::set<std::string>::iterator next;
+  dirent entry;
+};
+DIR* opendir(const char* path) {
+  const std::string prefix = std::string(path) + "/";
+  if (!directories.contains(path)) { errno = ENOENT; return nullptr; }
+  auto* listing = new Listing;
+  for (const auto& [name, writable] : directories)
+    if (name.starts_with(prefix)) listing->names.insert(name.substr(prefix.size(), name.find('/', prefix.size()) - prefix.size()));
+  listing->next = listing->names.begin();
+  return reinterpret_cast<DIR*>(listing);
+}
+dirent* readdir(DIR* dir) {
+  auto* listing = reinterpret_cast<Listing*>(dir);
+  if (listing->next == listing->names.end()) return nullptr;
+  std::snprintf(listing->entry.d_name, sizeof listing->entry.d_name, "%s", (listing->next++)->c_str());
+  return &listing->entry;
+}
+int closedir(DIR* dir) { delete reinterpret_cast<Listing*>(dir); return 0; }
 }
 
 #define open fixture::open
@@ -61,6 +107,10 @@ pid_t getpid() { return 123; }
 #define unlink fixture::unlink
 #define mkdir fixture::mkdir
 #define getpid fixture::getpid
+#define stat(path, out) fixture::stat_path(path, out)
+#define opendir fixture::opendir
+#define readdir fixture::readdir
+#define closedir fixture::closedir
 #include "../native/ps5/filesystem_access.cpp"
 #undef open
 #undef close
@@ -69,9 +119,16 @@ pid_t getpid() { return 123; }
 #undef unlink
 #undef mkdir
 #undef getpid
+#undef stat
+#undef opendir
+#undef readdir
+#undef closedir
 
 elevation::Status status = elevation::Status::ok;
-elevation::Status elevation::request(Capability, const char*) noexcept { return status; }
+elevation::Status elevation::request(Capability, const char*) noexcept {
+  if (fixture::elevate) fixture::elevate();
+  return status;
+}
 void crash_log::start(const char*) {}
 const char* elevation::path() noexcept { return "fixture"; }
 extern "C" int sceNetInit() { return 0; }
@@ -86,7 +143,11 @@ void reset(bool writable_sandbox) {
   fixture::files.clear();
   fixture::handles.clear();
   fixture::corrupt_read = false;
+  fixture::inodes.clear();
+  fixture::mtimes.clear();
+  fixture::elevate = nullptr;
   console_access = false;
+  std::strcpy(app_root, "/app0");
   std::strcpy(data_root, "/download0");
   std::strcpy(temp_root, "/temp0");
   status = elevation::Status::ok;
@@ -127,5 +188,47 @@ int main() {
   assert(!console_filesystem_accessible());
   assert(!fixture::directories.contains("/data/ps5-react"));
   expect_path("/download0/file", "/download0/file");
-  std::puts("PASS: writable roots, read-only fallback, exclusive probes, failed proof and failed elevation");
+
+  // Elevation moved the root, and another instance's sandbox holds _000: each root is the
+  // directory that was /app0, /download0 and /temp0 before.
+  reset(true);
+  fixture::inodes = {{"/app0", 1}, {"/download0", 2}, {"/temp0", 3}};
+  fixture::elevate = [] {
+    fixture::directories = {{"/data", true}, {"/mnt", false}, {"/mnt/sandbox", false},
+                            {"/mnt/sandbox/PPSA99058_000", false}, {"/mnt/sandbox/PPSA99058_000/app0", false},
+                            {"/mnt/sandbox/PPSA99058_000/download0", false},
+                            {"/mnt/sandbox/PPSA99058_001", false}, {"/mnt/sandbox/PPSA99058_001/app0", false},
+                            {"/mnt/sandbox/PPSA99058_001/download0", true}, {"/mnt/sandbox/PPSA99058_001/temp0", true},
+                            {"/mnt/sandbox/NPXS40028_000", false}};
+    fixture::inodes = {{"/mnt/sandbox/PPSA99058_001/app0", 1}, {"/mnt/sandbox/PPSA99058_001/download0", 2},
+                       {"/mnt/sandbox/PPSA99058_001/temp0", 3}};
+  };
+  initialize_filesystem_access();
+  expect_path("/app0/i18n/locales/en.json", "/mnt/sandbox/PPSA99058_001/app0/i18n/locales/en.json");
+  expect_path("/download0/overdrive/downloads.json", "/mnt/sandbox/PPSA99058_001/download0/overdrive/downloads.json");
+  expect_path("/temp0/x", "/mnt/sandbox/PPSA99058_001/temp0/x");
+
+  // Without an identity to match, the app root is the newest candidate holding the eboot.
+  reset(true);
+  fixture::directories.erase("/app0");
+  fixture::elevate = [] {
+    for (const char* name : {"/mnt", "/mnt/sandbox", "/mnt/sandbox/pfsmnt", "/mnt/sandbox/pfsmnt/PPSA99058-app0",
+                             "/mnt/sandbox/PPSA99058_000", "/mnt/sandbox/PPSA99058_000/app0",
+                             "/mnt/sandbox/PPSA99058_002", "/mnt/sandbox/PPSA99058_002/app0"})
+      fixture::directories[name] = false;
+    fixture::files["/mnt/sandbox/pfsmnt/PPSA99058-app0/eboot.bin"] = 'E';
+    fixture::files["/mnt/sandbox/PPSA99058_002/app0/eboot.bin"] = 'E';
+    fixture::mtimes = {{"/mnt/sandbox/pfsmnt/PPSA99058-app0/eboot.bin", 100},
+                       {"/mnt/sandbox/PPSA99058_002/app0/eboot.bin", 200}};
+  };
+  initialize_filesystem_access();
+  expect_path("/app0/eboot.bin", "/mnt/sandbox/PPSA99058_002/app0/eboot.bin");
+
+  // Nothing to verify keeps the old guess.
+  reset(true);
+  fixture::directories.erase("/app0");
+  initialize_filesystem_access();
+  expect_path("/app0/x", "/mnt/sandbox/PPSA99058_000/app0/x");
+  std::puts("PASS: writable roots, read-only fallback, exclusive probes, failed proof and failed elevation, "
+            "verified sandbox roots");
 }

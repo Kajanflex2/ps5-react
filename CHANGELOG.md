@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — verified sandbox roots
+
+- After filesystem elevation, find /app0, /download0 and /temp0 by the identity (device and inode)
+  each had before the root change, among the title's /mnt/sandbox/<TITLE>_NNN folders, instead of
+  assuming _000. When _000 was not this process's sandbox the app read a missing app folder: no
+  locale files, runtime fonts or payloads. Without an identity the app root is the newest candidate
+  holding eboot.bin; each rejected candidate is logged.
+
 ## Unreleased — download tail splitting
 
 - Once every range of a download has a connection, idle connections split the range with the most

@@ -117,15 +117,62 @@ bool ensure_directory(const char* path) {
   return errno == EEXIST && accessible(path);
 }
 
-// Preserve logical app roots after the helper changes the process's root.
-// Prefer the original sandbox mounts. /data is used only after its write/read
-// proof succeeded, and is namespaced by title rather than replacing app files.
-void sandbox_root(const char* name, char* out, std::size_t size) {
+bool same_directory(const char* path, const struct stat& before) {
+  struct stat now;
+  return stat(path, &now) == 0 && S_ISDIR(now.st_mode) && now.st_dev == before.st_dev &&
+         now.st_ino == before.st_ino;
+}
+
+// After the helper moves the process's root to the console's, the sandbox's /app0 is
+// /mnt/sandbox/<TITLE>_NNN/app0, and NNN is not always 000: another instance's sandbox, live or
+// still being torn down, can hold that name, with its folders empty or gone.
+// Each root is the directory that has the identity /<name> had before elevation. Without that
+// identity, an app root must hold the eboot (the newest one wins), and the old guess comes last.
+void sandbox_root(const char* name, const struct stat* before, char* out, std::size_t size) {
   char path[256];
   std::snprintf(path, sizeof path, "/%s", name);
-  if (!accessible(path))
-    std::snprintf(path, sizeof path, "/mnt/sandbox/%s_000/%s", PS5_REACT_TITLE, name);
-  std::snprintf(out, size, "%s", path);
+  if (before && same_directory(path, *before)) {
+    std::snprintf(out, size, "%s", path);
+    return;
+  }
+  const bool app = !std::strcmp(name, "app0");
+  char newest[256] = "";
+  time_t newest_time = 0;
+  const auto consider = [&](const char* candidate) {
+    if (before && same_directory(candidate, *before)) return true;
+    char marker[320];
+    std::snprintf(marker, sizeof marker, "%s/eboot.bin", candidate);
+    struct stat found;
+    if (app && stat(marker, &found) == 0 && (!*newest || found.st_mtime > newest_time)) {
+      std::snprintf(newest, sizeof newest, "%s", candidate);
+      newest_time = found.st_mtime;
+    }
+    hui::sys::log("[PS5-REACT] %s root candidate rejected: %s", name, candidate);
+    return false;
+  };
+  constexpr std::size_t prefix = sizeof PS5_REACT_TITLE - 1;
+  if (DIR* dir = opendir("/mnt/sandbox")) {
+    bool matched = false;
+    while (dirent* item = readdir(dir)) {
+      if (std::strncmp(item->d_name, PS5_REACT_TITLE "_", prefix + 1)) continue;
+      std::snprintf(path, sizeof path, "/mnt/sandbox/%s/%s", item->d_name, name);
+      if ((matched = consider(path))) break;
+    }
+    closedir(dir);
+    if (matched) {
+      std::snprintf(out, size, "%s", path);
+      return;
+    }
+  }
+  if (app) consider("/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0");
+  if (*newest) {
+    std::snprintf(out, size, "%s", newest);
+  } else {
+    std::snprintf(path, sizeof path, "/%s", name);
+    if (!accessible(path)) std::snprintf(path, sizeof path, "/mnt/sandbox/%s_000/%s", PS5_REACT_TITLE, name);
+    std::snprintf(out, size, "%s", path);
+  }
+  hui::sys::log("[PS5-REACT] %s root unverified, using %s", name, out);
 }
 #endif
 }
@@ -133,6 +180,15 @@ void sandbox_root(const char* name, char* out, std::size_t size) {
 void initialize_filesystem_access() {
 #if PS5_REACT_CONSOLE_FILESYSTEM
   host_platform_prepare_filesystem_access();
+  const char* names[] = {"app0", "download0", "temp0"};
+  char* roots[] = {app_root, data_root, temp_root};
+  struct stat before[3];
+  bool known[3];
+  for (int i = 0; i < 3; ++i) {
+    char path[32];
+    std::snprintf(path, sizeof path, "/%s", names[i]);
+    known[i] = stat(path, &before[i]) == 0;
+  }
   const auto status = [] {
     Network network;
     // An already-initialized library can return an error from sceNetInit;
@@ -144,9 +200,7 @@ void initialize_filesystem_access() {
                 static_cast<unsigned>(status), elevation::path());
   if (status != elevation::Status::ok) return;
   console_access = true;
-  sandbox_root("app0", app_root, sizeof app_root);
-  sandbox_root("download0", data_root, sizeof data_root);
-  sandbox_root("temp0", temp_root, sizeof temp_root);
+  for (int i = 0; i < 3; ++i) sandbox_root(names[i], known[i] ? &before[i] : nullptr, roots[i], sizeof app_root);
   remove_legacy_image_cache();
   if (!writable(data_root)) {
     hui::sys::log("[PS5-REACT] data root not writable path=%s errno=%d; trying title data", data_root, errno);
