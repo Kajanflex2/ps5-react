@@ -357,6 +357,17 @@ JSValue pad_reset_light_bar(JSContext*, JSValueConst, int, JSValueConst*) {
   return JS_UNDEFINED;
 }
 
+JSValue pad_set_trigger_resistance(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  std::int32_t mask = 0, position = 0, strength = 0;
+  if (JS_ToInt32(ctx, &mask, argv[0]) || JS_ToInt32(ctx, &position, argv[1]) || JS_ToInt32(ctx, &strength, argv[2]))
+    return JS_EXCEPTION;
+  if (mask < 1 || mask > 3 || position < 0 || position > 9 || strength < 0 || strength > 8)
+    return JS_ThrowRangeError(ctx, "pad.setTriggerResistance: mask 1-3, position 0-9, strength 0-8; got %d, %d, %d",
+                              mask, position, strength);
+  host::set_trigger_resistance(static_cast<unsigned>(mask), position, strength);
+  return JS_UNDEFINED;
+}
+
 JSValue pad_vibrate(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   double strength = 0, seconds = 0;
   if (JS_ToFloat64(ctx, &strength, argv[0]) || JS_ToFloat64(ctx, &seconds, argv[1])) return JS_EXCEPTION;
@@ -453,7 +464,8 @@ constexpr Function kDevice[] = {{"info", device_info, 0}};
 constexpr Function kUsers[] = {{"foreground", users_foreground, 0}, {"loggedIn", users_logged_in, 0}};
 constexpr Function kPad[] = {
   {"setLightBar", pad_set_light_bar, 3}, {"resetLightBar", pad_reset_light_bar, 0},
-  {"vibrate", pad_vibrate, 2}, {"state", pad_state, 0},
+  {"vibrate", pad_vibrate, 2}, {"setTriggerResistance", pad_set_trigger_resistance, 3},
+  {"state", pad_state, 0},
 };
 constexpr Function kPower[] = {{"keepAwake", power_keep_awake, 1}};
 constexpr Function kText[] = {{"setLanguage", text_set_language, 1}};

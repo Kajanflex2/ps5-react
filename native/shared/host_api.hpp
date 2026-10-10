@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v7) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v8) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -36,6 +36,8 @@
 //   pad.setLightBar(r, g, b)       0..255 each
 //   pad.resetLightBar()
 //   pad.vibrate(strength, seconds) strength 0..1
+//   pad.setTriggerResistance(mask, position, strength) ABI v8; DualSense adaptive triggers (mask 1 L2,
+//                                  2 R2) resist from zone position 0..9 at strength 1..8; 0 turns them off
 //   pad.state()                    {connected, leftX, leftY, rightX, rightY, l2, r2, buttons}
 //   power.keepAwake(enabled)       ABI v4; while true, the console does not enter rest mode
 //                                  for inactivity (the desktop display does not sleep)
@@ -164,6 +166,7 @@ bool open_url(const char* url);
 void set_light_bar(std::uint8_t r, std::uint8_t g, std::uint8_t b);
 void reset_light_bar();
 void vibrate(float strength, float seconds);
+void set_trigger_resistance(unsigned mask, int position, int strength);
 // While enabled, keeps the system from sleeping for inactivity; the app's last call wins.
 void keep_awake(bool enabled);
 

@@ -248,6 +248,15 @@ screens, except that on return to Home the branch keeps the scrolled row.
 | Worst frame | 855 ms | 42 ms |
 | Home idle, hero animating | about 4 fps (each frame a full repaint, 133 ms raster + 113 ms upload) | 60 fps |
 
+## Adaptive trigger resistance — 2026-10-10
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus 1.7beta4, a DualSense, a development
+build of a private app (not in this repository) from uncommitted changes.
+`Controller.setTriggerResistance('l2', 0.75, 0.4)` while a search keyboard had focus, released
+when focus left it: the user felt L2 resist from about 40% of its travel and go slack again
+outside the keyboard. `scePadSetTriggerEffect` logged no error (the host logs only a nonzero
+result). R2, other strengths and positions, and the release when the app quits were not checked.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

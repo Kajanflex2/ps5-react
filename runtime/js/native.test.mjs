@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Archives, BrowserCapture, Downloads, Http, Power, Sound} from './native.js';
+import {acquireImage, Archives, BrowserCapture, Controller, Downloads, Http, Power, Sound} from './native.js';
 import {setFrameBatcher} from './frame.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
@@ -157,6 +157,22 @@ test('image listener commits are measured individually despite the frame batcher
   } finally {
     setFrameBatcher(run => run());
     performance.now = originalNow;
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('Controller.setTriggerResistance maps 0..1 onto the DualSense zones and steps', () => {
+  const calls = [];
+  globalThis.__ps5ReactNative = {pad: {setTriggerResistance: (...args) => calls.push(args)}};
+  try {
+    Controller.setTriggerResistance('l2', 0.75, 0.5);
+    Controller.setTriggerResistance('both', 0.01);
+    Controller.setTriggerResistance('r2', 0);
+    assert.deepEqual(calls, [[1, 5, 6], [3, 0, 1], [2, 0, 0]], 'a weak resistance is one step, not off');
+    assert.throws(() => Controller.setTriggerResistance('l1', 1), /trigger must be/);
+    assert.throws(() => Controller.setTriggerResistance('l2', 2), /must be 0\.\.1/);
+    assert.throws(() => Controller.setTriggerResistance('l2', 0.5, NaN), /must be 0\.\.1/);
+  } finally {
     delete globalThis.__ps5ReactNative;
   }
 });

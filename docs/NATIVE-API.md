@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v5) is
+each host installs before the bundle runs. Its exact shape (ABI v8) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -183,6 +183,7 @@ subMessage follows the message on a second line.
 | `setLightBar(color)` | `'#rrggbb'` or `{r, g, b}` with 0–255 channels |
 | `resetLightBar()` | Restores the system color |
 | `vibrate(strength = 1, ms = 200)` | `strength` 0–1 |
+| `setTriggerResistance(trigger, strength, from = 0)` | ABI v8. DualSense adaptive trigger resistance on `'l2'`, `'r2'` or `'both'`: from `from` of the travel (0 top, 1 bottom) on, at `strength` 0–1 in eight steps; `strength` 0 releases it. The PS5 releases the triggers when the app quits; the desktop preview logs the request without sending it |
 | `getState()` | `GamepadState`, the latest polled state |
 
 `GamepadState` is:

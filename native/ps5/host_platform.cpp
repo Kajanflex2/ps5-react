@@ -348,6 +348,10 @@ void vibrate(float strength, float seconds) {
   else active_pad->rumble(strength, seconds);
 }
 
+void set_trigger_resistance(unsigned mask, int position, int strength) {
+  if (active_pad) active_pad->set_trigger_feedback(mask, position, strength);
+}
+
 namespace {
 // ps5-homebrew-ui's output thread: the main 48 kHz stereo port, 256-frame grains.
 hui::ps5::AudioOut audio_out;

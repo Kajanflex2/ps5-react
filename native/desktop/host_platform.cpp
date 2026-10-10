@@ -176,6 +176,10 @@ void vibrate(float strength, float seconds) {
   if (!controller || SDL_GameControllerRumble(controller, level, level, static_cast<Uint32>(seconds * 1000)) != 0)
     std::printf("[pad] vibrate %.2f for %.2fs (no controller rumble)\n", strength, seconds);
 }
+// SDL2 can send DualSense trigger effects only as raw report bytes; the preview logs the request instead.
+void set_trigger_resistance(unsigned mask, int position, int strength) {
+  std::printf("[pad] trigger resistance mask=%u from %d at %d (not sent on desktop)\n", mask, position, strength);
+}
 // SDL keeps the display awake while a window is open; keepAwake(false) lets it sleep.
 void keep_awake(bool enabled) {
   if (enabled) SDL_DisableScreenSaver();

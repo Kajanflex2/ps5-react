@@ -118,9 +118,24 @@ export const Controller = {
   resetLightBar: () => host().pad.resetLightBar(),
   /** @param {number} [strength] 0..1 @param {number} [ms] */
   vibrate: (strength = 1, ms = 200) => host().pad.vibrate(strength, ms / 1000),
+  /**
+   * DualSense adaptive trigger resistance. From `from` of the travel (0 top, 1 bottom) on, the
+   * trigger pushes back at `strength` (0..1, in eight steps); `strength` 0 releases it. The PS5
+   * releases the triggers when the app quits; the desktop preview only logs the request.
+   * @param {'l2' | 'r2' | 'both'} trigger @param {number} strength @param {number} [from]
+   */
+  setTriggerResistance(trigger, strength, from = 0) {
+    const mask = TRIGGER_MASKS[trigger];
+    if (!mask) throw new Error(`Controller.setTriggerResistance: trigger must be 'l2', 'r2' or 'both', got '${trigger}'`);
+    if (!(strength >= 0 && strength <= 1) || !(from >= 0 && from <= 1))
+      throw new RangeError(`Controller.setTriggerResistance: strength and from must be 0..1, got ${strength} and ${from}`);
+    host().pad.setTriggerResistance(mask, Math.round(from * 9), strength > 0 ? Math.max(1, Math.round(strength * 8)) : 0);
+  },
   /** @returns {GamepadState} */
   getState: () => host().pad.state(),
 };
+
+const TRIGGER_MASKS = {l2: 1, r2: 2, both: 3};
 
 function sameState(a, b) {
   return a.connected === b.connected && a.leftX === b.leftX && a.leftY === b.leftY

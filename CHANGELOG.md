@@ -183,6 +183,10 @@
 
 ## Unreleased
 
+- Add `Controller.setTriggerResistance(trigger, strength, from)` (native ABI v8): DualSense
+  adaptive trigger resistance from a point of the travel on, in eight strengths, through
+  `scePadSetTriggerEffect` (`patches/platform-trigger-effect.patch`). The triggers are released when
+  the app quits. The desktop preview logs the request.
 - Text with a `lineHeight` taller than its font's is centred in the line, with half the extra space
   above it, as in CSS and React Native. It used to sit at the top: an 18 px label in a 27 px line
   (`text-md`) sat 2.5 px above an icon centred beside it. Text with a `lineHeight` set moves down by
