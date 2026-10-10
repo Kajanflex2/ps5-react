@@ -23,6 +23,11 @@ bool list_directory(const char* path, void (*visit)(const char* name, void* user
 void trace(const char* step, const char* detail = "");
 // Bytes the host lets one extraction hold for buffered writes; under 1 MiB, files are written inline.
 std::size_t pipeline_bytes();
+// Called with true before an in-process (libarchive) extraction opens its archive and with false after
+// it ends. The host frees what it can for it; false means the heap lacks room even for inline writes,
+// and the job fails with no_memory instead of the title running out of heap.
+bool hold_memory(bool hold);
+inline constexpr const char* no_memory = "Not enough memory to extract.";
 // True while the host downloads a file; a RAR extraction then leaves it more cores. Cheap, any thread.
 bool downloading();
 // RAR sets go to rar-extract (native/rar_worker), a program of its own: UnRAR's license keeps its code

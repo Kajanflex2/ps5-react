@@ -417,6 +417,11 @@ void use_utf8_names() {
     trace("locale", locale ? locale : "none");
   });
 }
+// The host's memory hold for the libarchive path, released once the archive is freed.
+struct MemoryHold {
+  const bool room = hold_memory(true);
+  ~MemoryHold() { hold_memory(false); }
+};
 archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5PasswordReader>& decrypted) {
   const auto& request = job.request;
   use_utf8_names();
@@ -762,8 +767,10 @@ void run(const std::shared_ptr<Job>& pointer) {
   if (request.stream) {
     if (!extract_rar(job, staging, receipt, error) && error.empty()) error = "Extracting while downloading needs the RAR worker.";
   } else if (!rar_volumes(request) || !extract_rar(job, staging, receipt, error)) {
+    const MemoryHold memory;
     std::unique_ptr<Rar5PasswordReader> decrypted;
     auto* archive = open_archive(job, error, decrypted);
+    if (!memory.room) error = no_memory;
     trace("opened", error.c_str());
     {
       // Without the ring or its threads, files are written inline as before.

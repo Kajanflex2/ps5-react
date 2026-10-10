@@ -121,6 +121,12 @@ def main():
   with zipfile.ZipFile(zip,"w",compression=zipfile.ZIP_DEFLATED) as z:z.writestr("nested/game.ffpfsc",DATA)
   assert run("zip",[zip])[0]=="completed"
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
+  # A heap without room for an in-process extraction fails it cleanly, with nothing written.
+  os.environ["ARCHIVE_NO_MEMORY"]="1"
+  try:out=run("zip-no-memory",[zip])
+  finally:del os.environ["ARCHIVE_NO_MEMORY"]
+  assert out[0]=="failed" and out[2]=="Not enough memory to extract.",out
+  assert not (root/"zip-no-memory").exists() and not (root/"zip-no-memory.extracting").exists()
   # Real password-protected ZIP: correct password, incorrect/missing password, and ordered volumes.
   protected=root/"protected.zip";payload=root/"protected.bin";payload.write_bytes(DATA)
   subprocess.run(["/usr/bin/zip","-q","-P","DLPSGAME.COM",str(protected),payload.name],cwd=root,check=True)

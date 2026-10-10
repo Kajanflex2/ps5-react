@@ -15,6 +15,7 @@
 #include <vector>
 
 std::size_t archives::pipeline_bytes() { return 0; }
+bool archives::hold_memory(bool) { return true; }
 void archives::trace(const char*, const char*) {}
 bool archives::list_directory(const char*, void (*)(const char*, void*), void*) { return false; }
 

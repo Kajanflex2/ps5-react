@@ -24,6 +24,12 @@ constexpr std::size_t kMaxEncodedBytes = 4 * 1024 * 1024;
 constexpr std::size_t kEncodedCacheBytes = 4 * 1024 * 1024;
 // Encoded responses kept on disk between launches; entries older than a week are fetched again.
 constexpr std::size_t kDiskCacheBytes = 256 * 1024 * 1024;
+// While memory is held (see hold_memory) or the heap is above kPressurePercent of its size, unused
+// decoded images are kept to kLowCacheBytes and encoded bytes to kLowEncodedBytes; a decode that would
+// take the heap past kCeilingPercent is refused and tried again later. Images re-decode when shown.
+constexpr std::size_t kLowCacheBytes = 16 * 1024 * 1024;
+constexpr std::size_t kLowEncodedBytes = 1024 * 1024;
+constexpr std::size_t kPressurePercent = 70, kCeilingPercent = 85;
 // One image decodes at a time, holding up to about 8 bytes per source pixel (PNG) while it does.
 constexpr std::uint64_t kMaxSourcePixels = 5000000;
 
@@ -66,6 +72,12 @@ Memory memory();
 void defer(int ms);
 // Replaces the decoded cache budget (render thread, any time).
 void set_cache_bytes(std::size_t bytes);
+// Holds memory for a job that needs the heap (an extraction), or ends one hold (any thread). Holds
+// nest; the next poll() trims to the low budgets and the normal ones return when the last ends.
+void hold_memory(bool hold);
+// The heap the loader runs in, read on the render, fetch and decode threads (size 0: unknown).
+struct Heap { std::size_t live = 0, size = 0; };
+void set_heap_probe(Heap (*probe)());
 // Counters since start() and the busiest origins, one line for the host's periodic memory log:
 // how loads were served (decoded cache, encoded cache, disk, network), decodes, cancellations,
 // retries and failures, and per origin its requests, failures, average latency and bytes.
