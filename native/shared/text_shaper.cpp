@@ -696,8 +696,10 @@ void render(const ERTextRenderParams* params, const char* text, const std::uint8
   const int ellipsis_w = ellipsis_count * (font_glyph(layout.baked, ellipsis_cp)->advance + layout.letter_spacing + layout.bold);
 
   for (std::size_t i = 0; i < lines.size(); i++) {
-    const int line_top = clip.y + static_cast<int>(i) * line_height;
-    if (line_top >= clip.y + clip.h) break;
+    const int box_top = clip.y + static_cast<int>(i) * line_height;
+    if (box_top >= clip.y + clip.h) break;
+    // Half the leading above the line, as in CSS and React Native, so a lineHeight centres the text.
+    const int line_top = box_top + (line_height - layout.line_height) / 2;
     Line line = lines[i];
     const bool cut = ellipsis && i + 1 == lines.size();
     if (cut) {

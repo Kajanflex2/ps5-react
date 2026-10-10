@@ -36,7 +36,8 @@
       "patches/embeddedReact-layers.patch",
       "patches/embeddedReact-offscreen-record.patch",
       "patches/embeddedReact-translate-copy.patch",
-      "patches/embeddedReact-batched-updates.patch"
+      "patches/embeddedReact-batched-updates.patch",
+      "patches/embeddedReact-text-half-leading.patch"
     ]
   },
   "platform": {

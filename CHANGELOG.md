@@ -183,6 +183,10 @@
 
 ## Unreleased
 
+- Text with a `lineHeight` taller than its font's is centred in the line, with half the extra space
+  above it, as in CSS and React Native. It used to sit at the top: an 18 px label in a 27 px line
+  (`text-md`) sat 2.5 px above an icon centred beside it. Text with a `lineHeight` set moves down by
+  half the difference.
 - Downloads treat a busy server as busy, not as a damaged file. archive.org's storage node answered
   HTTP 500 to some of 16 or 64 concurrent ranges, which failed the whole task as "server changed the
   resource"; now HTTP 5xx/429/408 and broken connections retry the range up to eight times (0.5 to
