@@ -140,6 +140,8 @@ test('archive and download task IDs are isolated while sharing the polling timer
       assert.throws(() => Archives.extract({sources: ['/download0/file'], destination: '/download0/out', password}), /password/);
     assert.equal(extractions.length, 1);
     archive.cancel(); assert.deepEqual(cancelled, ['archives:1']);
+    archiveSnapshots = [{id: 1, state: 'extracting', phase: 'finishing', written: 50, synced: 1, syncTotal: 3}]; tick();
+    assert.deepEqual([archive.snapshot.phase, archive.snapshot.synced, archive.snapshot.syncTotal], ['finishing', 1, 3]);
     archiveSnapshots = [{id: 1, state: 'completed', written: 50, artifacts: ['game.ffpfsc']}]; tick();
     assert.deepEqual((await archive.done).artifacts, ['game.ffpfsc']);
     assert.equal(download.snapshot.state, 'queued');

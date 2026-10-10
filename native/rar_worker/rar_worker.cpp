@@ -11,8 +11,10 @@
 // "source <path>"... in volume order, "wait 1" when later volumes are still downloading (each is read once
 // a file has its name), then "end". The engine can then write "cancel" at any time.
 // Answers: "ready", "p <bytes written>" a few times a second, "k" every second, "f <sha256> <size>
-// <path>" once a file is on disk and synced, "t <key>=<value>..." with where the time went (an engine that
-// does not know a key ignores it), then "ok", "cancelled" or "fail <reason>".
+// <path>" once a file is on disk and synced, "d <bytes>" first with the unpacked size of every file when
+// all volumes are there and their headers read, "s" once every file is decoded and only writes and fsyncs are
+// left, "t <key>=<value>..." with where the time went (an engine that does not know a line or a key ignores
+// it), then "ok", "cancelled" or "fail <reason>".
 #include "rar.hpp"
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -386,7 +388,8 @@ struct Session {
   explicit Session(const Options& options) : options(options) {}
   const Options& options;
   Writer writer;
-  size_t next_volume = 1;
+  // `reading` is the index of the volume UnRAR is reading, the count of them once it wants one past the last.
+  size_t next_volume = 1, reading = 0;
   bool writing = false, missing_volume = false, missing_password = false;
   const Archive* archive = nullptr;
   uint64 written = 0, last_report = 0;
@@ -439,9 +442,11 @@ int CALLBACK callback(UINT message, LPARAM user, LPARAM p1, LPARAM p2) {
     case UCM_NEXTVOLUMEW: {
       // Volumes are exactly the engine's list, in order, whatever their names.
       if (session.next_volume >= session.options.sources.size()) {
+        session.reading = session.next_volume;
         session.missing_volume = true;
         return -1;
       }
+      session.reading = session.next_volume;
       const std::string& path = session.options.sources[session.next_volume++];
       if (session.options.wait && !await_volume(session, path)) {
         if (!cancelled) session.missing_volume = true;
@@ -587,6 +592,56 @@ std::string extract(Session& session, CommandData& command, Archive& archive, Cm
   }
 }
 
+// The unpacked size of every file in the set, from each volume's headers; 0 while volumes are still
+// downloading or when one cannot be read, and the engine keeps its own estimate.
+uint64 declared_total(const Options& options) {
+  if (options.wait) return 0;
+  CommandData command;
+  if (!options.password.empty()) {
+    std::wstring password;
+    UtfToWide(options.password.c_str(), password);
+    command.Password.Set(password.c_str());
+  }
+  uint64 total = 0;
+  try {
+    for (const auto& path : options.sources) {
+      std::wstring name;
+      UtfToWide(path.c_str(), name);
+      Archive archive(&command);
+      if (!archive.Open(name) || !archive.IsArchive(false)) return 0;
+      while (archive.ReadHeader() > 0 && archive.GetHeaderType() != HEAD_ENDARC) {
+        const FileHeader& header = archive.FileHead;
+        // A file split across volumes declares its whole size in each part; it counts once.
+        if (archive.GetHeaderType() == HEAD_FILE && !header.Dir && !header.SplitBefore) {
+          if (header.UnknownUnpSize || header.UnpSize < 0) return 0;
+          total += uint64(header.UnpSize);
+        }
+        archive.SeekToNext();
+      }
+      if (archive.BrokenHeader || archive.FailedHeaderDecryption) return 0;
+    }
+  } catch (...) {
+    total = 0;
+  }
+  return total;
+}
+
+// The volume to blame for a set that ended early or failed its checksum, 1-based, or 0 when none stands
+// out. A set's volumes are all one size but the last, so a shorter one was cut off; otherwise, for an
+// early end, the volume UnRAR was reading.
+size_t suspect_volume(const Session& session, bool early_end) {
+  const auto& sources = session.options.sources;
+  std::vector<uint64> sizes;
+  for (const auto& path : sources) {
+    struct stat st;
+    sizes.push_back(lstat(path.c_str(), &st) ? 0 : uint64(st.st_size));
+  }
+  const uint64 full = sizes.size() > 1 ? *std::max_element(sizes.begin(), sizes.end() - 1) : 0;
+  for (size_t i = 0; i + 1 < sizes.size(); ++i)
+    if (sizes[i] < full) return i + 1;
+  return early_end && session.reading < sources.size() ? session.reading + 1 : 0;
+}
+
 std::string run(Session& session) {
   const Options& options = session.options;
   CommandData command;
@@ -642,6 +697,7 @@ int main() {
   {
     Session session{options};
     try {
+      if (const uint64 total = declared_total(options)) say("d " + std::to_string(total));
       ErrHandler.Clean();
       error = run(session);
     } catch (RAR_EXIT code) {
@@ -652,6 +708,7 @@ int main() {
     } catch (...) {
       error = describe(ERAR_UNKNOWN);
     }
+    if (error.empty() && !cancelled) say("s");
     const auto written = session.writer.finish();
     if (error.empty()) error = written;
     const Writer& w = session.writer;
@@ -666,6 +723,11 @@ int main() {
       if (session.missing_password) error = describe(ERAR_MISSING_PASSWORD);
       else if (session.missing_volume) error = describe(ERAR_EOPEN);
     }
+    // Which volume, so that one alone is downloaded again: "... Volume 6 of 12 looks incomplete."
+    const bool early_end = error == describe(ERAR_EOPEN) || error == describe(ERAR_EREAD);
+    if (!cancelled && session.options.sources.size() > 1 && (early_end || error == describe(ERAR_BAD_DATA)))
+      if (const size_t volume = suspect_volume(session, early_end))
+        error += " Volume " + std::to_string(volume) + " of " + std::to_string(session.options.sources.size()) + " looks incomplete.";
   }
   {
     std::lock_guard lock(alive_mutex);
