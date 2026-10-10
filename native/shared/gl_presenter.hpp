@@ -32,6 +32,11 @@ public:
   // The layers the next present draws beneath the framebuffer, bottom first; valid until that present.
   void set_layers(std::span<const ERLayer> layers) { layers_ = layers; }
   void release();
+  // Where the last draw spent its CPU time: copying pixels to the GPU (framebuffer rows and new layer
+  // images, which can block until the GPU is done with the previous frame's buffers), and issuing the
+  // draws. Bytes count what was handed to GL.
+  struct Timing { std::uint32_t upload_us = 0, draw_us = 0; std::uint64_t upload_bytes = 0; };
+  const Timing& last_timing() const { return timing_; }
 
 private:
   unsigned int program_ = 0, texture_ = 0, vao_ = 0;
@@ -62,6 +67,7 @@ private:
   std::vector<LayerImage> layer_images_;
   std::uint64_t presents_ = 0;
   std::span<const ERLayer> layers_;
+  Timing timing_;
 
   bool one_to_one(int surface_width, int surface_height) const;
   void upload_changed_rows(const std::uint32_t* argb, std::span<const ERRect> damage,

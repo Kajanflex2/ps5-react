@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — cheaper mounts
+
+- The frame-time log splits `present` into `upload` and `draw` and reports the kilobytes uploaded
+  per frame (docs/ANIMATION.md).
+
 ## Unreleased — downloads across rest mode
 
 - A download whose connections die while the title is suspended (rest mode, or another app in

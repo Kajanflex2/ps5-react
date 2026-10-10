@@ -46,9 +46,11 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
     Tenths phase[phase_count];
     for (int i = 0; i < phase_count; ++i) phase[i] = tenths(phase_sum_[i], std::uint64_t{frames_} * 1000);
     const int length = std::snprintf(line_, sizeof line_,
-                  "frame: fps=%u.%u total avg=%u.%ums p95=%u.%u max=%u.%u | input=%u.%u update=%u.%u present=%u.%u swap=%u.%u",
+                  "frame: fps=%u.%u total avg=%u.%ums p95=%u.%u max=%u.%u | input=%u.%u update=%u.%u present=%u.%u"
+                  " (upload=%u.%u draw=%u.%u up=%lluKB) swap=%u.%u",
                   MS(fps), MS(avg), MS(p), MS(max), MS(phase[input]), MS(phase[update]), MS(phase[present]),
-                  MS(phase[swap]));
+                  MS(tenths(upload_sum_, std::uint64_t{frames_} * 1000)), MS(tenths(draw_sum_, std::uint64_t{frames_} * 1000)),
+                  static_cast<unsigned long long>(upload_bytes_sum_ / frames_ / 1024), MS(phase[swap]));
     if (perf_frames_ && length > 0 && length < static_cast<int>(sizeof line_)) {
       const std::uint64_t ms = std::uint64_t{perf_frames_} * 1000;
       // Mean ms per frame, and mean kilopixels repainted (dirty) and written (blit) per frame.
@@ -67,6 +69,7 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
     summary = line_;
     std::fill(std::begin(phase_sum_), std::end(phase_sum_), 0);
     total_sum_ = 0; total_max_ = 0; frames_ = 0;
+    upload_sum_ = draw_sum_ = upload_bytes_sum_ = 0;
     std::fill(std::begin(engine_sum_), std::end(engine_sum_), 0);
     std::fill(std::begin(js_sub_sum_), std::end(js_sub_sum_), 0);
     std::fill(std::begin(raster_sub_sum_), std::end(raster_sub_sum_), 0);
@@ -102,7 +105,8 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
   // `other` is host work outside js/layout/raster/present: input polling, swap, the animation tick.
   std::snprintf(slow_line_, sizeof slow_line_,
                 "slow frame: %u.%ums | js=%u.%u (dispatch=%u.%u react=%u.%u marshal=%u.%u) layout=%u.%u"
-                " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u sweep=%u.%u) present=%u.%u other=%u.%u"
+                " raster=%u.%u (prepass=%u.%u render=%u.%u blit=%u.%u sweep=%u.%u) present=%u.%u (upload=%u.%u draw=%u.%u)"
+                " other=%u.%u"
                 " | dirty=%dx%d@%d,%d %ukpx blit=%ukpx%s",
                 MS(tenths(f.frame_us, 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_JS], 1000)),
                 MS(tenths(f.js_us[ER_PERF_JS_DISPATCH], 1000)), MS(tenths(f.js_us[ER_PERF_JS_RECONCILE], 1000)),
@@ -110,6 +114,7 @@ const char* FrameStats::end_frame(std::uint32_t slow_us) {
                 MS(tenths(f.phase_us[ER_PERF_PHASE_RASTER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_PREPASS], 1000)),
                 MS(tenths(f.raster_us[ER_PERF_RASTER_RENDER], 1000)), MS(tenths(f.raster_us[ER_PERF_RASTER_BLIT], 1000)),
                 MS(tenths(f.raster_us[ER_PERF_RASTER_SWEEP], 1000)), MS(tenths(f.phase_us[ER_PERF_PHASE_PRESENT], 1000)),
+                MS(tenths(upload_us_, 1000)), MS(tenths(draw_us_, 1000)),
                 MS(tenths(f.other_us, 1000)),
                 static_cast<int>(f.dirty_w), static_cast<int>(f.dirty_h), static_cast<int>(f.dirty_x),
                 static_cast<int>(f.dirty_y), static_cast<unsigned>(f.dirty_px / 1000),

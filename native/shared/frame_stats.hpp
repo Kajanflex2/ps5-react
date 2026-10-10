@@ -25,6 +25,11 @@ public:
   // Closes the engine's frame. Returns its breakdown when it took longer than
   // slow_us (at most a few per window), otherwise nullptr.
   const char* end_frame(std::uint32_t slow_us);
+  // The presenter's split of the present phase for this frame (GlPresenter::last_timing).
+  void note_present(std::uint32_t upload_us, std::uint32_t draw_us, std::uint64_t upload_bytes) {
+    upload_us_ = upload_us; draw_us_ = draw_us;
+    upload_sum_ += upload_us; draw_sum_ += draw_us; upload_bytes_sum_ += upload_bytes;
+  }
   // How many slow frames a window reports (default 8).
   void set_slow_line_limit(std::uint32_t limit) { slow_line_limit_ = limit; }
 
@@ -42,5 +47,7 @@ private:
   std::uint64_t engine_sum_[ER_PERF_PHASE_COUNT] = {}, js_sub_sum_[ER_PERF_JS_COUNT] = {},
                 raster_sub_sum_[ER_PERF_RASTER_COUNT] = {}, dirty_px_sum_ = 0, blit_px_sum_ = 0;
   std::uint32_t perf_frames_ = 0, slow_lines_ = 0, parallel_frames_ = 0, parallel_seen_ = 0;
-  char line_[384] = {}, slow_line_[320] = {};
+  std::uint64_t upload_sum_ = 0, draw_sum_ = 0, upload_bytes_sum_ = 0;
+  std::uint32_t upload_us_ = 0, draw_us_ = 0;
+  char line_[448] = {}, slow_line_[352] = {};
 };

@@ -13,6 +13,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 
 namespace {
@@ -178,20 +179,34 @@ bool GlPresenter::draw(const std::uint32_t* argb, int sw, int sh) {
   return present(sw, sh);
 }
 
+namespace {
+std::uint32_t micros_since(std::chrono::steady_clock::time_point start) {
+  return static_cast<std::uint32_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+}
+} // namespace
+
 bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage, std::span<const DamageMove> moves,
                        int sw, int sh) {
   if (!program_ || !argb || sw <= 0 || sh <= 0) return false;
+  timing_ = {};
   if (one_to_one(sw, sh)) {
     synced_ = false;
+    const auto start = std::chrono::steady_clock::now();
     if (!buffer_synced_) {
       upload_rows(argb, 0, height_);
       buffer_synced_ = true;
     } else {
       upload_changed_rows(argb, damage, moves);
     }
-    return present(sw, sh);
+    timing_.upload_us = micros_since(start);
+    const auto drawing = std::chrono::steady_clock::now();
+    const bool ok = present(sw, sh);
+    timing_.draw_us = micros_since(drawing);
+    return ok;
   }
   buffer_synced_ = false;
+  const auto start = std::chrono::steady_clock::now();
   glBindTexture(GL_TEXTURE_2D, texture_);
   // A new surface size also covers fullscreen changes and lost drawables.
   if (!synced_ || sw != surface_width_ || sh != surface_height_) {
@@ -199,15 +214,23 @@ bool GlPresenter::draw(const std::uint32_t* argb, std::span<const ERRect> damage
     synced_ = true;
     surface_width_ = sw; surface_height_ = sh;
   } else {
+    bool moved = true;
     for (const DamageMove& m : moves)
       if (!move(m)) {
         upload(argb, {0, 0, width_, height_});
-        return present(sw, sh);
+        moved = false;
+        break;
       }
-    glBindTexture(GL_TEXTURE_2D, texture_);
-    for (const ERRect& rect : damage) upload(argb, rect);
+    if (moved) {
+      glBindTexture(GL_TEXTURE_2D, texture_);
+      for (const ERRect& rect : damage) upload(argb, rect);
+    }
   }
-  return present(sw, sh);
+  timing_.upload_us = micros_since(start);
+  const auto drawing = std::chrono::steady_clock::now();
+  const bool ok = present(sw, sh);
+  timing_.draw_us = micros_since(drawing);
+  return ok;
 }
 
 bool GlPresenter::one_to_one(int sw, int sh) const { return !buffer_textures_.empty() && sw == width_ && sh == height_; }
@@ -237,6 +260,7 @@ void GlPresenter::upload_rows(const std::uint32_t* argb, int y0, int y1) {
     if (b <= a) continue;
     glBindBuffer(GL_TEXTURE_BUFFER, buffers_[i]);
     glBufferSubData(GL_TEXTURE_BUFFER, (a - first) * row, (b - a) * row, argb + static_cast<std::size_t>(a) * width_);
+    timing_.upload_bytes += static_cast<std::uint64_t>(b - a) * row;
   }
   glBindBuffer(GL_TEXTURE_BUFFER, 0);
 }
@@ -246,6 +270,7 @@ void GlPresenter::upload(const std::uint32_t* argb, const ERRect& rect) {
   glPixelStorei(GL_UNPACK_ROW_LENGTH, width_);
   glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.w, rect.h, GL_RGBA, GL_UNSIGNED_BYTE,
                   argb + static_cast<std::size_t>(rect.y) * width_ + rect.x);
+  timing_.upload_bytes += static_cast<std::uint64_t>(rect.w) * rect.h * 4;
 }
 
 // Texture rows are framebuffer rows, so framebuffer coordinates address both blits directly.
@@ -290,6 +315,7 @@ const GlPresenter::LayerImage* GlPresenter::layer_image(const ERLayer& layer) {
   for (int i = 0; i < slices; ++i) {
     const int first = i * rows, count = std::min(rows + 1, layer.image_h - first);
     glBindBuffer(GL_TEXTURE_BUFFER, image.buffers[i]);
+    timing_.upload_bytes += static_cast<std::uint64_t>(layer.image_w) * count * 4;
     glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(layer.image_w) * count * 4,
                  layer.pixels + static_cast<std::size_t>(first) * layer.image_w, GL_STATIC_DRAW);
     glBindTexture(GL_TEXTURE_BUFFER, image.textures[i]);

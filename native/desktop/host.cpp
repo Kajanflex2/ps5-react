@@ -425,6 +425,10 @@ struct Host {
       presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
       if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), sw, sh)) return false;
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
+      {
+        const GlPresenter::Timing& t = presenter.last_timing();
+        stats.note_present(t.upload_us, t.draw_us, t.upload_bytes);
+      }
       damage_tracker_clear();
     }
     stats.lap(FrameStats::present, now_us());

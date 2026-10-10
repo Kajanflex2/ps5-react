@@ -396,7 +396,7 @@ Both hosts always print a summary every two seconds (illustrative values, not
 a PS5 measurement):
 
 ```text
-[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 swap=11.4 | js=0.4 (dispatch=0.1 react=0.2 marshal=0.1) layout=0.1 raster=2.7 (prepass=0.1 render=1.6 blit=1.0) dirty=310kpx blit=820kpx
+[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 (upload=0.8 draw=1.1 up=2100KB) swap=11.4 | js=0.4 (dispatch=0.1 react=0.2 marshal=0.1) layout=0.1 raster=2.7 (prepass=0.1 render=1.6 blit=1.0) dirty=310kpx blit=820kpx
 ```
 
 On the PS5, the line goes to the kernel log (`sceKernelDebugOutText`), which
@@ -410,7 +410,7 @@ omits it.
 | `total avg`, `p95`, `max` | Time between frame starts in ms: mean, 95th percentile, and worst |
 | `input` | Controller polling and action dispatch to JavaScript, including any render a handler causes |
 | `update` | The JavaScript pump, React commits, layout, and CPU rasterization |
-| `present` | Uploading the damaged framebuffer rectangles and drawing them with OpenGL |
+| `present` | Uploading the damaged framebuffer rectangles and drawing them with OpenGL, split into `upload` (texture uploads, including newly shown layer images), `draw` (draw calls) and `up` (mean kilobytes uploaded per frame). Both are CPU time issuing the work; the GPU may finish it later, inside `swap` |
 | `swap` | Buffer swap, including any wait for vertical sync |
 | `js` | JavaScript, split into `dispatch` (handlers, timers, microtasks), `react` (component renders) and `marshal` (props pushed into the engine) |
 | `layout` | Flex layout and text measurement |
@@ -434,7 +434,7 @@ Frames longer than 33 ms also print one line each (at most eight per window),
 with the same split for that frame and the bounding box of its repaint:
 
 ```text
-[PS5-REACT] slow frame: 41.2ms | js=24.1 (dispatch=0.6 react=22.0 marshal=1.0) layout=0.2 raster=9.8 (prepass=0.1 render=6.4 blit=3.2 sweep=0.0) present=2.6 other=4.5 | dirty=2356x1250@142,190 1849kpx blit=7013kpx
+[PS5-REACT] slow frame: 41.2ms | js=24.1 (dispatch=0.6 react=22.0 marshal=1.0) layout=0.2 raster=9.8 (prepass=0.1 render=6.4 blit=3.2 sweep=0.0) present=2.6 (upload=1.1 draw=1.5) other=4.5 | dirty=2356x1250@142,190 1849kpx blit=7013kpx
 ```
 
 `other` is host work outside those phases, including the vsync wait. A PS5

@@ -426,6 +426,10 @@ bool run_proof() {
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
+      {
+        const GlPresenter::Timing& t = presenter.last_timing();
+        stats.note_present(t.upload_us, t.draw_us, t.upload_bytes);
+      }
       const std::size_t repainted = damage_tracker_area();
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
