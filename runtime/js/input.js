@@ -21,7 +21,7 @@ globalThis.__ps5ReactDispatch = action => {
 
 /**
  * The host actions, as native/shared/actions.hpp names them.
- * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square'} ButtonAction shoulders, triggers, Triangle, Square
+ * @typedef {'l1' | 'r1' | 'l2' | 'r2' | 'triangle' | 'square' | 'options'} ButtonAction shoulders, triggers, Triangle, Square, Options
  * @typedef {'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | ButtonAction} Action
  */
 

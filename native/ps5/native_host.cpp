@@ -217,6 +217,7 @@ constexpr std::pair<hui::Action, HostAction> kExtraActions[] = {
   {hui::Action::page_prev, HostAction::l1}, {hui::Action::page_next, HostAction::r1},
   {hui::Action::jump_prev, HostAction::l2}, {hui::Action::jump_next, HostAction::r2},
   {hui::Action::north, HostAction::triangle}, {hui::Action::west, HostAction::square},
+  {hui::Action::menu, HostAction::options},
 };
 
 GamepadState gamepad_state(const hui::InputFrame& input) {

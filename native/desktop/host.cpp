@@ -68,7 +68,7 @@ constexpr std::pair<SDL_Keycode, HostAction> kKeyActions[] = {
   {SDLK_UP, HostAction::up}, {SDLK_DOWN, HostAction::down}, {SDLK_LEFT, HostAction::left},
   {SDLK_RIGHT, HostAction::right}, {SDLK_RETURN, HostAction::confirm}, {SDLK_SPACE, HostAction::confirm},
   {SDLK_BACKSPACE, HostAction::back}, {SDLK_q, HostAction::l1}, {SDLK_e, HostAction::r1}, {SDLK_z, HostAction::l2},
-  {SDLK_c, HostAction::r2}, {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square},
+  {SDLK_c, HostAction::r2}, {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square}, {SDLK_o, HostAction::options},
 };
 constexpr std::pair<SDL_GameControllerButton, HostAction> kButtonActions[] = {
   {SDL_CONTROLLER_BUTTON_DPAD_UP, HostAction::up}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, HostAction::down},
@@ -76,6 +76,7 @@ constexpr std::pair<SDL_GameControllerButton, HostAction> kButtonActions[] = {
   {SDL_CONTROLLER_BUTTON_A, HostAction::confirm}, {SDL_CONTROLLER_BUTTON_B, HostAction::back},
   {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, HostAction::l1}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, HostAction::r1},
   {SDL_CONTROLLER_BUTTON_Y, HostAction::triangle}, {SDL_CONTROLLER_BUTTON_X, HostAction::square},
+  {SDL_CONTROLLER_BUTTON_START, HostAction::options},
 };
 
 float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
