@@ -221,7 +221,8 @@ test('archive and download task IDs are isolated while sharing the polling timer
   try {
     const download = Downloads.enqueue({url: 'https://example.com/file', destination: '/download0/file'});
     const archive = Archives.extract({sources: ['/download0/file'], destination: '/download0/out', password: '[DLPSGAME.COM]'});
-    assert.deepEqual(extractions, [[['/download0/file'], '/download0/out', 1024**4, '[DLPSGAME.COM]']]);
+    assert.deepEqual(extractions, [[['/download0/file'], '/download0/out', 1024**4, '[DLPSGAME.COM]', false]]);
+    assert.equal(Archives.streams, true);
     for (const password of [42, 'bad\0password', 'x'.repeat(1025)])
       assert.throws(() => Archives.extract({sources: ['/download0/file'], destination: '/download0/out', password}), /password/);
     assert.equal(extractions.length, 1);

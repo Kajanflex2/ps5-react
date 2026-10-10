@@ -46,6 +46,8 @@ extern "C" int __wrap_sceNetSend(int fd, const void* data, std::size_t size, int
 }
 extern "C" int __wrap_sceNetRecv(int fd, void* data, std::size_t size, int flags) {
   const int result = __real_sceNetRecv(fd, data, size, flags);
+  // A receive timeout (EAGAIN, 35) is how the RAR worker's stream is polled, several times a second.
+  if (result < 0 && *sceNetErrnoLoc() == 35) return result;
   if (result <= 0) report("recv", result);
   return result;
 }

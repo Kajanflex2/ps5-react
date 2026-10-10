@@ -50,6 +50,7 @@ JSValue extract(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!ok) return JS_ThrowTypeError(ctx,"archives.extract: source path is not allowed");
     request.sources.push_back(std::move(file));
   }
+  if (argc > 4) request.stream = JS_ToBool(ctx,argv[4]) == 1;
   std::string error; const auto id = archives::enqueue(std::move(request),error);
   if (!id) return JS_ThrowPlainError(ctx,"archives.extract: %s",error.c_str());
   return JS_NewUint32(ctx,id);
@@ -97,7 +98,7 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 JSValue ps5_react_archive_api(JSContext* ctx) {
   JSValue api = JS_NewObject(ctx);
-  JS_SetPropertyStr(ctx,api,"extract",JS_NewCFunction(ctx,extract,"extract",4));
+  JS_SetPropertyStr(ctx,api,"extract",JS_NewCFunction(ctx,extract,"extract",5));
   JS_SetPropertyStr(ctx,api,"inspect",JS_NewCFunction(ctx,inspect,"inspect",1));
   JS_SetPropertyStr(ctx,api,"cancel",JS_NewCFunction(ctx,cancel,"cancel",1));
   JS_SetPropertyStr(ctx,api,"poll",JS_NewCFunction(ctx,poll,"poll",0));

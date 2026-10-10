@@ -160,6 +160,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
+        # Every range, and every part of a split one, answers 503 twice before it serves.
+        if path == "/slow-twice" and selected != "bytes=0-0":
+            with self.guard:
+                refused = sum(r[:2] == (path, selected) for r in self.requests) <= 2
+            if refused:
+                self.send_response(503)
+                self.send_header("Retry-After", "0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
         if path == "/suspend" and selected != "bytes=0-0":
             with self.guard:
                 refuse = Handler.suspend_refusals > 0
@@ -232,9 +242,11 @@ def main():
         directory = Path(temporary)
         binary = compile_client(directory)
 
-        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=(), adaptive=False, range_probe=False):
+        def run(endpoint, path="-", connections=4, max_bytes=1024*1024, cancel=0, digest="", method="GET", file_limit=0, stop=0, pieces=False, hashes=None, recover=False, reject_html=False, no_redirect=False, mirrors=(), adaptive=False, range_probe=False, range_bytes=0):
             environment = dict(os.environ)
             environment.pop("NETWORK_TEST_RANGE_PROBE", None)
+            environment.pop("NETWORK_TEST_RANGE_BYTES", None)
+            if range_bytes: environment["NETWORK_TEST_RANGE_BYTES"] = str(range_bytes)
             if range_probe: environment["NETWORK_TEST_RANGE_PROBE"] = "1"
             for name in ("NETWORK_TEST_RECOVER", "NETWORK_TEST_REJECT_HTML", "NETWORK_TEST_NO_REDIRECT", "NETWORK_TEST_ADAPTIVE"):
                 environment.pop(name, None)
@@ -340,6 +352,24 @@ def main():
             assert out["state"] == "completed", out
             assert path.read_bytes() == DATA
             path.unlink()
+        # With more connections than ranges, idle ones split the ranges still running; every byte lands
+        # once, and a split part that fails retries alone.
+        for endpoint in ("/slow", "/flaky"):
+            before = len(Handler.requests)
+            path = directory / f"split{endpoint.replace('/', '-')}"
+            out = run(endpoint, path, connections=32, digest=hashlib.sha256(DATA).hexdigest(), range_bytes=4*1024*1024)
+            assert out["state"] == "completed", out
+            assert path.read_bytes() == DATA
+            starts = [int(r[1][6:].split("-")[0]) for r in Handler.requests[before:] if r[1] and r[1] != "bytes=0-0"]
+            assert any(start % (4*1024*1024) for start in starts), starts
+            path.unlink()
+        # Each part of a split range has its own attempts: a range cut into many parts that each fail
+        # twice still completes.
+        path = directory / "split-twice"
+        out = run("/slow-twice", path, connections=32, digest=hashlib.sha256(DATA).hexdigest(), range_bytes=len(DATA))
+        assert out["state"] == "completed", out
+        assert path.read_bytes() == DATA
+        path.unlink()
         # Ranges spread over a mirror with the primary's size and ETag; one with another ETag gets none.
         before = len(Handler.requests)
         path = directory / "mirrored"

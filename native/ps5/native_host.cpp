@@ -72,6 +72,7 @@ std::size_t archives::pipeline_bytes() {
   const std::size_t ring = size >= 256 * MiB ? 32 * MiB : size >= 192 * MiB ? 16 * MiB : 8 * MiB;
   return live + 64 * MiB + ring + 16 * MiB <= size ? ring : 0;
 }
+bool archives::downloading() { return network::downloading(); }
 // rar-extract.elf goes to the payload loader as the package installer does, and reports on the socket.
 int archives::start_rar_worker(const std::string& request, std::string& error) {
   const int socket = payload_loader::send("rar-extract.elf", request, 5'000'000, "Archives.extract", error);

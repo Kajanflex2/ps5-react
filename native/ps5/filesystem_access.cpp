@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
+#include <initializer_list>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -117,15 +118,94 @@ bool ensure_directory(const char* path) {
   return errno == EEXIST && accessible(path);
 }
 
-// Preserve logical app roots after the helper changes the process's root.
-// Prefer the original sandbox mounts. /data is used only after its write/read
-// proof succeeded, and is namespaced by title rather than replacing app files.
-void sandbox_root(const char* name, char* out, std::size_t size) {
+// /<name> as it was before elevation. The helper replaces only the process's root and jail: this
+// descriptor, like the working directory, still names the sandbox's own folder afterwards.
+struct Before {
+  int fd = -1;
+  struct stat identity;
+};
+
+bool same_directory(const char* path, const Before& before) {
+  struct stat now;
+  return before.fd >= 0 && stat(path, &now) == 0 && S_ISDIR(now.st_mode) &&
+         now.st_dev == before.identity.st_dev && now.st_ino == before.identity.st_ino;
+}
+
+// The held folder's path from the console's root, as the kernel names it.
+bool held_path(const Before& before, char* out, std::size_t size) {
+  const int cwd = open(".", O_RDONLY | O_DIRECTORY, 0);
+  const bool found = cwd >= 0 && fchdir(before.fd) == 0 && getcwd(out, size);
+  if (!found) *out = '\0';
+  if (cwd >= 0) {
+    (void)fchdir(cwd);
+    close(cwd);
+  }
+  return found;
+}
+
+// After elevation the sandbox's /app0 is not at a fixed path: /mnt/sandbox/<TITLE>_NNN/app0 with an
+// NNN that is not always 000, and one console with a ShadowMount image install found no app files
+// at _000. Each root is the folder /<name> was before elevation: by the descriptor held
+// across it, else by its identity among the title's sandboxes. Without either, an app root must
+// hold the eboot (the newest wins, ShadowMount's /system_ex/app/<TITLE> among them), and the old
+// guess comes last. Every rejected candidate is logged.
+void sandbox_root(const char* name, const Before& before, char* out, std::size_t size) {
   char path[256];
   std::snprintf(path, sizeof path, "/%s", name);
-  if (!accessible(path))
-    std::snprintf(path, sizeof path, "/mnt/sandbox/%s_000/%s", PS5_REACT_TITLE, name);
-  std::snprintf(out, size, "%s", path);
+  if (same_directory(path, before)) {
+    std::snprintf(out, size, "%s", path);
+    return;
+  }
+  char held[256] = "";
+  if (before.fd >= 0 && held_path(before, held, sizeof held) && same_directory(held, before)) {
+    std::snprintf(out, size, "%s", held);
+    return;
+  }
+  if (before.fd >= 0) hui::sys::log("[PS5-REACT] %s root not found by its descriptor: '%s' errno=%d", name, held, errno);
+  const bool app = !std::strcmp(name, "app0");
+  char newest[256] = "";
+  time_t newest_time = 0;
+  const auto consider = [&](const char* candidate) {
+    if (same_directory(candidate, before)) return true;
+    char marker[320];
+    std::snprintf(marker, sizeof marker, "%s/eboot.bin", candidate);
+    struct stat found;
+    const bool has_eboot = app && stat(marker, &found) == 0;
+    if (has_eboot && (!*newest || found.st_mtime > newest_time)) {
+      std::snprintf(newest, sizeof newest, "%s", candidate);
+      newest_time = found.st_mtime;
+    }
+    hui::sys::log("[PS5-REACT] %s root candidate rejected: %s%s", name, candidate, has_eboot ? " (holds eboot.bin)" : "");
+    return false;
+  };
+  constexpr std::size_t prefix = sizeof PS5_REACT_TITLE - 1;
+  if (DIR* dir = opendir("/mnt/sandbox")) {
+    bool matched = false;
+    while (dirent* item = readdir(dir)) {
+      if (std::strncmp(item->d_name, PS5_REACT_TITLE "_", prefix + 1)) continue;
+      std::snprintf(path, sizeof path, "/mnt/sandbox/%s/%s", item->d_name, name);
+      if ((matched = consider(path))) break;
+    }
+    closedir(dir);
+    if (matched) {
+      std::snprintf(out, size, "%s", path);
+      return;
+    }
+  }
+  if (app)
+    for (const char* candidate : {"/system_ex/app/" PS5_REACT_TITLE, "/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0"})
+      if (consider(candidate)) {
+        std::snprintf(out, size, "%s", candidate);
+        return;
+      }
+  if (*newest) {
+    std::snprintf(out, size, "%s", newest);
+  } else {
+    std::snprintf(path, sizeof path, "/%s", name);
+    if (!accessible(path)) std::snprintf(path, sizeof path, "/mnt/sandbox/%s_000/%s", PS5_REACT_TITLE, name);
+    std::snprintf(out, size, "%s", path);
+  }
+  hui::sys::log("[PS5-REACT] %s root unverified, using %s", name, out);
 }
 #endif
 }
@@ -133,6 +213,18 @@ void sandbox_root(const char* name, char* out, std::size_t size) {
 void initialize_filesystem_access() {
 #if PS5_REACT_CONSOLE_FILESYSTEM
   host_platform_prepare_filesystem_access();
+  const char* names[] = {"app0", "download0", "temp0"};
+  char* roots[] = {app_root, data_root, temp_root};
+  Before before[3];
+  for (int i = 0; i < 3; ++i) {
+    char path[32];
+    std::snprintf(path, sizeof path, "/%s", names[i]);
+    before[i].fd = open(path, O_RDONLY | O_DIRECTORY, 0);
+    if (before[i].fd >= 0 && stat(path, &before[i].identity) != 0) {
+      close(before[i].fd);
+      before[i].fd = -1;
+    }
+  }
   const auto status = [] {
     Network network;
     // An already-initialized library can return an error from sceNetInit;
@@ -142,11 +234,12 @@ void initialize_filesystem_access() {
   }();
   hui::sys::log("[PS5-REACT] filesystem access status=%u path=%s",
                 static_cast<unsigned>(status), elevation::path());
+  if (status == elevation::Status::ok)
+    for (int i = 0; i < 3; ++i) sandbox_root(names[i], before[i], roots[i], sizeof app_root);
+  for (const Before& held : before)
+    if (held.fd >= 0) close(held.fd);
   if (status != elevation::Status::ok) return;
   console_access = true;
-  sandbox_root("app0", app_root, sizeof app_root);
-  sandbox_root("download0", data_root, sizeof data_root);
-  sandbox_root("temp0", temp_root, sizeof temp_root);
   remove_legacy_image_cache();
   if (!writable(data_root)) {
     hui::sys::log("[PS5-REACT] data root not writable path=%s errno=%d; trying title data", data_root, errno);

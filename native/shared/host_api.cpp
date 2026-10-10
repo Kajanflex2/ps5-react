@@ -164,6 +164,9 @@ JSValue fs_write_file(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   const char* text = JS_ToCStringLen(ctx, &length, argv[1]);
   if (!text) return JS_EXCEPTION;
   const int append = JS_ToBool(ctx, argv[2]);
+  // A state file saved then renamed over the old one must reach the disk first, or a power cut or
+  // forced close right after can leave it empty under its final name.
+  const int sync = JS_ToBool(ctx, argv[3]);
   const int fd = open(path.real(), O_WRONLY | O_CREAT | (append > 0 ? O_APPEND : O_TRUNC), 0644);
   bool ok = fd >= 0;
   for (std::size_t written = 0; ok && written < length;) {
@@ -172,6 +175,7 @@ JSValue fs_write_file(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
     if (count > 0) written += static_cast<std::size_t>(count);
   }
   JS_FreeCString(ctx, text);
+  if (ok && sync > 0) ok = fsync(fd) == 0;
   JSValue result = ok ? JS_UNDEFINED : path.error("fs.writeFile");
   if (fd >= 0 && close(fd) != 0 && ok) result = path.error("fs.writeFile");
   return result;
@@ -456,7 +460,7 @@ JSValue namespace_object(JSContext* ctx, const char* space, const Function (&fun
 
 constexpr Function kFs[] = {
   {"readDir", fs_read_dir, 1}, {"stat", fs_stat, 1}, {"readFile", fs_read_file, 1},
-  {"writeFile", fs_write_file, 3}, {"mkdir", fs_mkdir, 2}, {"remove", fs_remove, 1},
+  {"writeFile", fs_write_file, 4}, {"mkdir", fs_mkdir, 2}, {"remove", fs_remove, 1},
   {"removeTree", fs_remove_tree, 1},
   {"rename", fs_rename, 2}, {"chmod", fs_chmod, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
 };

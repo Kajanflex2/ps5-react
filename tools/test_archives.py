@@ -1,6 +1,6 @@
 """Real local archive extraction with the same native worker used on PS5."""
 from pathlib import Path
-import binascii,hashlib,io,json,lzma,os,random,struct,subprocess,tarfile,tempfile,zipfile
+import binascii,hashlib,io,json,lzma,os,random,struct,subprocess,tarfile,tempfile,time,zipfile
 from rar_worker import build_host
 ROOT=Path(__file__).resolve().parents[1]
 DATA=bytes(range(256))*1024
@@ -275,6 +275,43 @@ def main():
   result=run("rar-multipart",rar_parts)
   assert result[0]=="completed",result
   assert any(p.is_file() and p.stat().st_size>0 for p in (root/"rar-multipart").rglob("*") if p.name!=".ps5-react-extraction")
+  # A set extracted while it downloads: each later volume appears under its final name by a rename, over
+  # the empty file that reserves the name on the console.
+  def stream(name,blobs,gap,extra=()):
+   names=[root/f"{name}-v{i}" for i in range(len(blobs))]
+   names[0].write_bytes(blobs[0])
+   process=subprocess.Popen([str(binary),str(root/name),str(1024*1024),*map(str,names),"--stream",*extra],stdout=subprocess.PIPE,text=True)
+   for i,blob in enumerate(blobs[1:],1):
+    if gap is None:break
+    time.sleep(gap);partial=root/f"{name}-v{i}.part";partial.write_bytes(blob)
+    names[i].touch();time.sleep(gap);os.rename(partial,names[i])
+   return process.communicate(timeout=30)[0].splitlines(),names
+  blobs=[p.read_bytes() for p in rar_parts]
+  result,names=stream("rar-stream",blobs,0.6)
+  assert result[0]=="completed",result
+  tree=lambda d:{str(p.relative_to(d)):p.read_bytes() for p in d.rglob("*") if p.is_file() and not p.name.startswith(".ps5-react-")}
+  assert tree(root/"rar-stream")==tree(root/"rar-multipart"),(sorted(tree(root/"rar-stream")),sorted(tree(root/"rar-multipart")))
+  # Its receipt names every volume, as a run after the download writes it: a later run recovers it.
+  assert run("rar-stream",names)[0]=="completed"
+  started=time.monotonic();result,_=stream("rar-stream-cancel",blobs,None,["--cancel-after","700"])
+  assert result[0]=="cancelled" and time.monotonic()-started<5,result
+  assert not (root/"rar-stream-cancel").exists() and not (root/"rar-stream-cancel.extracting").exists()
+  damaged=list(blobs);damaged[1]=damaged[1][:4000]+bytes(len(damaged[1])-4000)
+  result,_=stream("rar-stream-damaged",damaged,0.3)
+  assert result[0]=="failed",result
+  assert not (root/"rar-stream-damaged").exists() and not (root/"rar-stream-damaged.extracting").exists()
+  result,_=stream("zip-stream",[zip.read_bytes()],None)
+  assert result[0]=="failed" and "RAR set" in result[-1],result
+  # A worker that goes silent may still write into its staging: the next extraction stages beside it,
+  # and a later launch removes what it left once the set is extracted.
+  silent=root/"silent-worker";silent.write_text("#!/bin/sh\nexec sleep 60\n");silent.chmod(0o755)
+  real=os.environ["PS5_REACT_RAR_WORKER"];os.environ["PS5_REACT_RAR_WORKER"]=str(silent)
+  try:out=subprocess.check_output([str(binary),str(root/"rar-silent"),str(1024*1024),*map(str,rar_parts),"--cancel-after","100","--again",real],text=True,timeout=60).splitlines()
+  finally:os.environ["PS5_REACT_RAR_WORKER"]=real
+  assert out[0]=="cancelled" and out[3]=="completed",out
+  assert (root/"rar-silent.extracting/.ps5-react-stage").exists() and not (root/"rar-silent.extracting-1").exists()
+  assert tree(root/"rar-silent")==tree(root/"rar-multipart")
+  assert run("rar-silent",rar_parts)[0]=="completed" and not (root/"rar-silent.extracting").exists()
   # A process interruption leaves owned staging; the next extraction restarts safely.
   st=zip.stat();identity=f"{zip}|{st.st_dev}|{st.st_ino}|{st.st_size}|{st.st_mtime_ns//10**9}|{st.st_mtime_ns%10**9}\n"
   staging=root/"interrupted.extracting";staging.mkdir();(staging/"unfinished").write_bytes(b"partial")

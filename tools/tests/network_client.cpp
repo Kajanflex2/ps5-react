@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
   }
   request.connections = argc > 3 ? static_cast<unsigned>(std::atoi(argv[3])) : 4;
   request.range_bytes = 1024*1024;
+  if (const char* bytes = std::getenv("NETWORK_TEST_RANGE_BYTES")) request.range_bytes = std::strtoull(bytes, nullptr, 10);
   request.max_bytes = argc > 4 ? std::strtoull(argv[4], nullptr, 10) : 1024*1024;
   const unsigned cancel_ms = argc > 5 ? static_cast<unsigned>(std::atoi(argv[5])) : 0;
   const unsigned stop_ms = argc > 9 ? static_cast<unsigned>(std::atoi(argv[9])) : 0;

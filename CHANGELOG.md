@@ -11,6 +11,33 @@
 - The frame-time log splits `present` into `upload` and `draw` and reports the kilobytes uploaded
   per frame (docs/ANIMATION.md).
 
+## Unreleased — verified sandbox roots
+
+- After filesystem elevation, find /app0, /download0 and /temp0 from a descriptor opened on each
+  before the root change (the helper replaces only the root and jail), checked by device and inode,
+  else by that identity among the title's /mnt/sandbox/<TITLE>_NNN folders, instead of assuming
+  _000. A console with a ShadowMount image install found no app files at _000: no locale files,
+  runtime fonts or payloads. Without an identity the app root is the newest candidate holding
+  eboot.bin, ShadowMount's /system_ex/app/<TITLE> included; each rejected candidate is logged.
+- app.log keeps the lines logged before it opens, so it shows how filesystem access chose its roots.
+
+## Unreleased — download tail splitting
+
+- Once every range of a download has a connection, idle connections split the range with the most
+  bytes left and fetch its second half, down to 1 MiB parts. Files with fewer ranges than allowed
+  connections (under 1 GiB at 16 MiB ranges) now use every connection, and a slow connection or the
+  last ranges no longer hold the end of a download: a 432 MiB file from a 1.4 MB/s-per-connection
+  origin went from 14.3 s to 8.4 s on a localhost benchmark. The stats line counts `splits`.
+- An origin's connection window grows while nine-tenths of it is busy, not only when it is full: a
+  console download held 25 of 27 connections for most of a 1.27 GB file and never grew.
+
+## Unreleased — RAR extraction threads
+
+- rar-extract decodes with 6 threads when no download runs and 4 while one does (or while the set
+  itself still downloads), instead of 4 always; it never takes more than the cores but one. Its
+  `throughput` trace line adds the threads, cores, process CPU time, write and fsync time and the
+  decoder's waits, which the worker now reports on a `t` line.
+
 ## Unreleased — downloads across rest mode
 
 - A download whose connections die while the title is suspended (rest mode, or another app in

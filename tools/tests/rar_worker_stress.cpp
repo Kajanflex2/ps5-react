@@ -19,6 +19,8 @@
 #include <unistd.h>
 
 void archives::trace(const char*, const char*) {}
+bool archives::downloading() { return false; }
+std::size_t archives::pipeline_bytes() { return 32u << 20; }
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) {
   DIR* directory = opendir(path);
   if (!directory) return false;

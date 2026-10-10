@@ -28,6 +28,7 @@
 #include <sys/stat.h>
 #include <thread>
 #include <time.h>
+#include <unordered_map>
 #include <unordered_set>
 #include <unistd.h>
 
@@ -55,6 +56,10 @@ struct Job {
 };
 std::mutex guard;
 std::shared_ptr<Job> active;
+// Destinations whose RAR worker went silent in this process, with how many times: it may still write into
+// that staging, so the next extraction there stages beside it under a new name.
+std::mutex silent_guard;
+std::unordered_map<std::string, unsigned> silent_workers;
 std::uint32_t next_id = 1;
 
 // CPU time of the calling thread, or 0 when the clock is unavailable.
@@ -166,6 +171,19 @@ std::string input_identity(const Request& request) {
   integrity::Hash hash;
   hash.update(identity.data(), identity.size());
   return hash.finish();
+}
+// A streamed set's later volumes do not exist yet, so until the end its identity is the volumes' paths:
+// the app keeps each set in a folder of its own. The receipt gets the full identity once all are there.
+std::string stream_identity(const Request& request) {
+  std::string identity = "stream\n";
+  for (const auto& path : request.sources) identity += path + "\n";
+  integrity::Hash hash;
+  hash.update(identity.data(), identity.size());
+  return hash.finish();
+}
+bool regular_file(const std::string& path) {
+  struct stat st;
+  return !lstat(path.c_str(), &st) && S_ISREG(st.st_mode);
 }
 // Bounded metadata I/O avoids libc++ locale machinery unavailable in native titles.
 bool read_metadata(const std::string& path, std::string& text) {
@@ -508,11 +526,15 @@ bool rar_volumes(const Request& request) {
     return std::any_of(rar_signatures.begin(), rar_signatures.end(), [&](std::string_view signature) { return bytes.starts_with(signature); });
   });
 }
+// Decoder threads: PS5 has 8 cores; the interface keeps two either way, and downloads (a streamed set's own
+// included) two more.
+unsigned rar_threads(const Request& request) { return request.stream || downloading() ? 4 : 6; }
 std::string rar_request(const Request& request, const std::string& staging) {
   constexpr char digits[] = "0123456789abcdef";
-  std::string text = "RARX1\nthreads 0\nwindow " + std::to_string(rar_window) + "\nlimit " + std::to_string(request.max_bytes) + "\n";
+  std::string text = "RARX1\nthreads " + std::to_string(rar_threads(request)) + "\nwindow " + std::to_string(rar_window) + "\nlimit " + std::to_string(request.max_bytes) + "\n";
   for (auto extension : image_extensions) text += "flatten " + std::string(extension) + "\n";
   text += "reserved .ps5-react-\n";
+  if (request.stream) text += "wait 1\n";
   if (!request.password.empty()) {
     text += "password ";
     for (unsigned char c : request.password) { text += digits[c >> 4]; text += digits[c & 15]; }
@@ -558,7 +580,7 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   }
   trace("rar worker started");
   const auto started = std::chrono::steady_clock::now();
-  std::string pending;
+  std::string pending, timings;
   std::uint64_t total = 0;
   bool finished = false, succeeded = false, cancel_sent = false, exited = false;
   unsigned silent = 0;
@@ -588,6 +610,8 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
         job.snapshot.written = std::min(written, job.request.max_bytes);
       } else if (line.starts_with("f ")) {
         if (const auto refusal = rar_file(job, staging, line.substr(2), total, receipt); !refusal.empty() && error.empty()) error = refusal;
+      } else if (line.starts_with("t ")) {
+        timings = line.substr(1);
       } else if (line == "ok" || line == "cancelled" || line.starts_with("fail ")) {
         finished = true;
         succeeded = line == "ok";
@@ -602,8 +626,16 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
   trace("rar worker finished", error.c_str());
   {
     std::lock_guard lock(job.mutex);
+    // The worker's own timings, as its "t" line names them; one from an older worker has none.
+    const auto field = [&](const char* key) {
+      const auto at = timings.find(" " + std::string(key) + "=");
+      if (at == std::string::npos) return std::string("?");
+      const auto from = at + std::strlen(key) + 2;
+      return timings.substr(from, timings.find(' ', from) - from);
+    };
     const auto summary = "RAR worker " + std::to_string(total >> 20) + "MiB " + std::to_string(job.snapshot.entries)
-        + " entries total=" + std::to_string(elapsed_us(started) / 1000) + "ms";
+        + " entries total=" + std::to_string(elapsed_us(started) / 1000) + "ms threads=" + field("threads") + " cores=" + field("cores")
+        + " decode-cpu=" + field("cpu") + " write=" + field("write") + " fsync=" + field("fsync") + " waited=" + field("waited");
     trace("throughput", summary.c_str());
   }
   if (error.empty() && !job.cancelled && !succeeded) error = finished ? "RAR extraction failed." : "The RAR worker stopped before finishing.";
@@ -612,6 +644,26 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
     job.snapshot.written = total;
   }
   return true;
+}
+std::string staging_path(const std::string& destination, unsigned attempt) {
+  return destination + ".extracting" + (attempt ? "-" + std::to_string(attempt) : "");
+}
+// Staging a silent worker left in an earlier launch, with this extraction's ownership record or none. The
+// first staging is restarted as usual unless the set is extracted already.
+void remove_leftover_staging(const Request& request, const std::string& identity) {
+  const auto leftover = [&](const std::string& staging) {
+    struct stat st;
+    std::string owner;
+    if (lstat(staging.c_str(), &st) || !S_ISDIR(st.st_mode)) return false;
+    const bool recorded = read_metadata(staging + "/" + stage_name, owner);
+    if ((recorded && owner != "P5ST001:" + identity + "\n" && owner != "P5ST001:" + stream_identity(request) + "\n") ||
+        (!recorded && !empty_directory(staging))) return true;
+    if (clear_directory(staging)) rmdir(staging.c_str());
+    return true;
+  };
+  struct stat st;
+  if (!lstat(request.destination.c_str(), &st)) leftover(staging_path(request.destination, 0));
+  for (unsigned attempt = 1; leftover(staging_path(request.destination, attempt)); attempt++) {}
 }
 void remove_owned_staging(const std::string& staging, const struct stat& owned) {
   struct stat current;
@@ -622,13 +674,19 @@ void run(const std::shared_ptr<Job>& pointer) {
   name_thread("archive");
   Job& job = *pointer;
   const auto& request = job.request;
-  const std::string staging = request.destination + ".extracting";
+  unsigned attempt = 0;
+  {
+    std::lock_guard lock(silent_guard);
+    if (const auto found = silent_workers.find(request.destination); found != silent_workers.end()) attempt = found->second;
+  }
+  const std::string staging = staging_path(request.destination, attempt);
   struct stat st;
-  const auto identity = input_identity(request);
-  if (identity.empty()) {
+  const auto identity = request.stream ? stream_identity(request) : input_identity(request);
+  if (identity.empty() || !regular_file(request.sources.front())) {
     fail(job, "Archive source is missing or not a regular file.");
     return;
   }
+  if (!attempt) remove_leftover_staging(request, identity);
   if (!lstat(request.destination.c_str(), &st)) {
     if (S_ISDIR(st.st_mode) && recover(job, identity)) {
       std::lock_guard lock(job.mutex);
@@ -639,7 +697,15 @@ void run(const std::shared_ptr<Job>& pointer) {
     return;
   }
   trace("start", request.sources.front().c_str());
-  if (const auto refusal = preflight(request.sources); !refusal.empty()) {
+  // A streamed set is checked on its first volume, as a partial download is; the worker refuses any later
+  // header over its limits. Its paths go to the worker's line protocol.
+  const auto streamed = [&] {
+    const auto found = inspect({request.sources.front()});
+    const bool lines = request.destination.find('\n') == std::string::npos &&
+        std::none_of(request.sources.begin(), request.sources.end(), [](const std::string& path) { return path.find('\n') != std::string::npos; });
+    return found.kind != "rar" || !lines ? std::string("Only a RAR set can be extracted while it downloads.") : found.refusal;
+  };
+  if (const auto refusal = request.stream ? streamed() : preflight(request.sources); !refusal.empty()) {
     trace("preflight refused", refusal.c_str());
     fail(job, refusal);
     return;
@@ -651,7 +717,9 @@ void run(const std::shared_ptr<Job>& pointer) {
     // staging that holds anything without a record for these inputs is preserved.
     const bool recorded = S_ISDIR(st.st_mode) && read_metadata(staging + "/" + stage_name, owner);
     const bool abandoned = S_ISDIR(st.st_mode) && !recorded && empty_directory(staging);
-    if (!abandoned && (!recorded || owner != "P5ST001:" + identity + "\n")) {
+    // Staging a streamed run of the same set left is this task's own too.
+    const bool own = recorded && (owner == "P5ST001:" + identity + "\n" || owner == "P5ST001:" + stream_identity(request) + "\n");
+    if (!abandoned && !own) {
       fail(job, "Staging belongs to another extraction; files preserved.");
       return;
     }
@@ -688,8 +756,12 @@ void run(const std::shared_ptr<Job>& pointer) {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
   }
-  // RAR sets go to rar-extract; everything else, and RAR when the worker cannot start, to libarchive.
-  if (!rar_volumes(request) || !extract_rar(job, staging, receipt, error)) {
+  // RAR sets go to rar-extract; everything else, and RAR when the worker cannot start, to libarchive. Only
+  // the worker waits for volumes: a streamed set it cannot take fails with nothing written, and the app
+  // extracts it once every volume is there.
+  if (request.stream) {
+    if (!extract_rar(job, staging, receipt, error) && error.empty()) error = "Extracting while downloading needs the RAR worker.";
+  } else if (!rar_volumes(request) || !extract_rar(job, staging, receipt, error)) {
     std::unique_ptr<Rar5PasswordReader> decrypted;
     auto* archive = open_archive(job, error, decrypted);
     trace("opened", error.c_str());
@@ -720,13 +792,24 @@ void run(const std::shared_ptr<Job>& pointer) {
     trace("read", error.c_str());
     archive_read_free(archive);
   }
+  if (error.empty() && !job.cancelled && request.stream) {
+    // Every volume exists now: the receipt names them as a run after the download would.
+    const auto full = input_identity(request);
+    if (full.empty()) error = "Archive source is missing or not a regular file.";
+    else receipt.replace(0, receipt.find('\n'), "P5AR001:" + full);
+  }
   if (error.empty() && !job.cancelled && !write_metadata(staging, receipt_name, receipt)) error = "Cannot save extraction completion receipt.";
   if (error.empty() && !job.cancelled && fsync(root)) error = std::strerror(errno);
   close(root);
   if (job.cancelled || !error.empty()) {
     // Only this task created staging. Input parts and existing destinations are never removed.
     // A console payload cannot be killed; staging stays for the next attempt rather than vanish under it.
-    if (!job.worker_unconfirmed) remove_owned_staging(staging, owned);
+    if (!job.worker_unconfirmed) {
+      remove_owned_staging(staging, owned);
+    } else {
+      std::lock_guard lock(silent_guard);
+      silent_workers[request.destination] = attempt + 1;
+    }
     fail(job, error.empty() ? "Extraction cancelled; downloaded parts are preserved." : error);
     return;
   }

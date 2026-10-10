@@ -27,7 +27,21 @@ std::atomic<int> log_fd{-1};
 constexpr long kMaxBytes = 16L * 1024 * 1024;
 std::atomic<long> written{0};
 
+// Lines from before start(), such as how filesystem access chose the folder app.log lives in, wait
+// here until start() opens it.
+char early[16 * 1024];
+std::atomic<std::size_t> early_size{0};
+std::atomic<bool> started{false};
+
 void append(const char* text, std::size_t size) {
+  if (!started.load(std::memory_order_acquire)) {
+    std::size_t at = early_size.load();
+    do {
+      if (at + size > sizeof early) return;
+    } while (!early_size.compare_exchange_weak(at, at + size));
+    std::memcpy(early + at, text, size);
+    return;
+  }
   const int fd = log_fd.load(std::memory_order_relaxed);
   if (fd < 0 || written.fetch_add(static_cast<long>(size)) > kMaxBytes) return;
   (void)!::write(fd, text, size);
@@ -93,6 +107,8 @@ void start(const char* directory) {
   std::snprintf(previous, sizeof previous, "%s/app.prev.log", directory);
   ::rename(current, previous);
   log_fd = ::open(current, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND, 0644);
+  started.store(true, std::memory_order_release);
+  if (log_fd >= 0) append(early, early_size.load());
   struct sigaction action {};
   action.sa_sigaction = fatal;
   action.sa_flags = SA_SIGINFO | SA_RESETHAND;

@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 void archives::trace(const char*, const char*) {}
+bool archives::downloading() { return false; }
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) {
   DIR* d = opendir(path);
   if (!d) return false;

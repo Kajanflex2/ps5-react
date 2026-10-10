@@ -66,8 +66,9 @@ export const FileSystem = {
   exists: path => host().fs.stat(path) !== null,
   /** UTF-8, at most 8 MiB. @param {string} path @returns {string} */
   readFile: path => host().fs.readFile(path),
-  /** @param {string} path @param {string} text */
-  writeFile: (path, text) => host().fs.writeFile(path, text, false),
+  /** `sync` waits until the text is on the disk, for a file saved then renamed into place.
+   * @param {string} path @param {string} text @param {{sync?: boolean}} [options] */
+  writeFile: (path, text, {sync = false} = {}) => host().fs.writeFile(path, text, false, sync),
   /** @param {string} path @param {string} text */
   appendFile: (path, text) => host().fs.writeFile(path, text, true),
   /** @param {string} path @param {{recursive?: boolean}} [options] */
@@ -360,16 +361,20 @@ export const Downloads = {
 
 /** Streaming archive extraction off-thread; source volumes are preserved on failure/cancel. */
 export const Archives = Object.freeze({
-  extract({sources, destination, maxBytes = 1024**4, password}) {
+  /** `stream: true` starts a RAR set while its later volumes still download: only the first must exist;
+   * each next one is read once a file appears under its final name (write volumes elsewhere and rename). */
+  extract({sources, destination, maxBytes = 1024**4, password, stream = false}) {
     if (password != null && (typeof password !== 'string' || password.length > 1024 || password.includes('\0')))
       throw new TypeError('Archives.extract: password must be a string without NUL, at most 1024 UTF-8 bytes.');
-    const id = host().archives.extract(sources, destination, maxBytes, password ?? '');
+    const id = host().archives.extract(sources, destination, maxBytes, password ?? '', stream === true);
     return networkTask(id, 'Archives.extract', destination, 'archives');
   },
   /** What the files' leading bytes are, and why their headers so far already rule out extraction.
    * Reads a few headers synchronously; also works on a download's growing `.part` file.
    * @param {string[]} sources ordered volumes @returns {{kind: string, refusal: string}} */
   inspect: sources => host().archives.inspect(sources),
+  /** Whether `extract` takes `stream`. */
+  streams: true,
 });
 
 /**
