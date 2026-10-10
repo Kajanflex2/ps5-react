@@ -24,7 +24,7 @@ bool corrupt_read = false;
 int open(const char* path, int flags, int) {
   const std::string name = path;
   if (flags & O_DIRECTORY) {
-    if (!directories.contains(name)) { errno = ENOENT; return -1; }
+    if (name != "." && !directories.contains(name)) { errno = ENOENT; return -1; }
   } else if (flags & O_CREAT) {
     const auto parent = name.substr(0, name.rfind('/'));
     if (!directories.contains(parent)) { errno = ENOENT; return -1; }
@@ -61,6 +61,15 @@ pid_t getpid() { return 123; }
 std::map<std::string, ino_t> inodes;
 std::map<std::string, time_t> mtimes;
 std::function<void()> elevate;
+// What getcwd names each folder opened before elevation, once the process changed into it.
+std::map<std::string, std::string> held;
+std::string cwd = ".";
+int fchdir(int fd) { cwd = handles.at(fd); return 0; }
+char* getcwd(char* out, std::size_t size) {
+  if (!held.contains(cwd)) { errno = ENOENT; return nullptr; }
+  std::snprintf(out, size, "%s", held.at(cwd).c_str());
+  return out;
+}
 int stat_path(const char* path, struct stat* out) {
   const std::string name = path;
   *out = {};
@@ -111,6 +120,8 @@ int closedir(DIR* dir) { delete reinterpret_cast<Listing*>(dir); return 0; }
 #define opendir fixture::opendir
 #define readdir fixture::readdir
 #define closedir fixture::closedir
+#define fchdir fixture::fchdir
+#define getcwd fixture::getcwd
 #include "../native/ps5/filesystem_access.cpp"
 #undef open
 #undef close
@@ -123,6 +134,8 @@ int closedir(DIR* dir) { delete reinterpret_cast<Listing*>(dir); return 0; }
 #undef opendir
 #undef readdir
 #undef closedir
+#undef fchdir
+#undef getcwd
 
 elevation::Status status = elevation::Status::ok;
 elevation::Status elevation::request(Capability, const char*) noexcept {
@@ -146,6 +159,7 @@ void reset(bool writable_sandbox) {
   fixture::inodes.clear();
   fixture::mtimes.clear();
   fixture::elevate = nullptr;
+  fixture::held.clear();
   console_access = false;
   std::strcpy(app_root, "/app0");
   std::strcpy(data_root, "/download0");
@@ -223,6 +237,31 @@ int main() {
   };
   initialize_filesystem_access();
   expect_path("/app0/eboot.bin", "/mnt/sandbox/PPSA99058_002/app0/eboot.bin");
+
+  // The descriptor held across elevation names the app folder wherever it is mounted.
+  reset(true);
+  fixture::inodes = {{"/app0", 1}};
+  fixture::held = {{"/app0", "/mnt/shadowmnt/Overdrive-PPSA99058_1a2b3c4d"}};
+  fixture::elevate = [] {
+    fixture::directories = {{"/data", true}, {"/mnt", false}, {"/mnt/sandbox", false},
+                            {"/mnt/sandbox/PPSA99058_000", false}, {"/mnt/sandbox/PPSA99058_000/app0", false},
+                            {"/mnt/shadowmnt", false}, {"/mnt/shadowmnt/Overdrive-PPSA99058_1a2b3c4d", false}};
+    fixture::inodes = {{"/mnt/shadowmnt/Overdrive-PPSA99058_1a2b3c4d", 1}};
+  };
+  initialize_filesystem_access();
+  expect_path("/app0/i18n/locales/en.json", "/mnt/shadowmnt/Overdrive-PPSA99058_1a2b3c4d/i18n/locales/en.json");
+  assert(fixture::handles.empty());
+
+  // A ShadowMount install without a match: _000 holds no eboot, its /system_ex/app folder does.
+  reset(true);
+  fixture::elevate = [] {
+    fixture::directories = {{"/data", true}, {"/mnt", false}, {"/mnt/sandbox", false},
+                            {"/mnt/sandbox/PPSA99058_000", false}, {"/mnt/sandbox/PPSA99058_000/app0", false},
+                            {"/system_ex", false}, {"/system_ex/app", false}, {"/system_ex/app/PPSA99058", false}};
+    fixture::files["/system_ex/app/PPSA99058/eboot.bin"] = 'E';
+  };
+  initialize_filesystem_access();
+  expect_path("/app0/eboot.bin", "/system_ex/app/PPSA99058/eboot.bin");
 
   // Nothing to verify keeps the old guess.
   reset(true);

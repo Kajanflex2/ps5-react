@@ -2,11 +2,13 @@
 
 ## Unreleased — verified sandbox roots
 
-- After filesystem elevation, find /app0, /download0 and /temp0 by the identity (device and inode)
-  each had before the root change, among the title's /mnt/sandbox/<TITLE>_NNN folders, instead of
-  assuming _000. When _000 was not this process's sandbox the app read a missing app folder: no
-  locale files, runtime fonts or payloads. Without an identity the app root is the newest candidate
-  holding eboot.bin; each rejected candidate is logged.
+- After filesystem elevation, find /app0, /download0 and /temp0 from a descriptor opened on each
+  before the root change (the helper replaces only the root and jail), checked by device and inode,
+  else by that identity among the title's /mnt/sandbox/<TITLE>_NNN folders, instead of assuming
+  _000. A console with a ShadowMount image install found no app files at _000: no locale files,
+  runtime fonts or payloads. Without an identity the app root is the newest candidate holding
+  eboot.bin, ShadowMount's /system_ex/app/<TITLE> included; each rejected candidate is logged.
+- app.log keeps the lines logged before it opens, so it shows how filesystem access chose its roots.
 
 ## Unreleased — download tail splitting
 

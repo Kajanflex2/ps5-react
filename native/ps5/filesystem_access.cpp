@@ -117,37 +117,64 @@ bool ensure_directory(const char* path) {
   return errno == EEXIST && accessible(path);
 }
 
-bool same_directory(const char* path, const struct stat& before) {
+// /<name> as it was before elevation. The helper replaces only the process's root and jail: this
+// descriptor, like the working directory, still names the sandbox's own folder afterwards.
+struct Before {
+  int fd = -1;
+  struct stat identity;
+};
+
+bool same_directory(const char* path, const Before& before) {
   struct stat now;
-  return stat(path, &now) == 0 && S_ISDIR(now.st_mode) && now.st_dev == before.st_dev &&
-         now.st_ino == before.st_ino;
+  return before.fd >= 0 && stat(path, &now) == 0 && S_ISDIR(now.st_mode) &&
+         now.st_dev == before.identity.st_dev && now.st_ino == before.identity.st_ino;
 }
 
-// After the helper moves the process's root to the console's, the sandbox's /app0 is
-// /mnt/sandbox/<TITLE>_NNN/app0, and NNN is not always 000: another instance's sandbox, live or
-// still being torn down, can hold that name, with its folders empty or gone.
-// Each root is the directory that has the identity /<name> had before elevation. Without that
-// identity, an app root must hold the eboot (the newest one wins), and the old guess comes last.
-void sandbox_root(const char* name, const struct stat* before, char* out, std::size_t size) {
+// The held folder's path from the console's root, as the kernel names it.
+bool held_path(const Before& before, char* out, std::size_t size) {
+  const int cwd = open(".", O_RDONLY | O_DIRECTORY, 0);
+  const bool found = cwd >= 0 && fchdir(before.fd) == 0 && getcwd(out, size);
+  if (!found) *out = '\0';
+  if (cwd >= 0) {
+    (void)fchdir(cwd);
+    close(cwd);
+  }
+  return found;
+}
+
+// After elevation the sandbox's /app0 is not at a fixed path: /mnt/sandbox/<TITLE>_NNN/app0 with an
+// NNN that is not always 000, and one console with a ShadowMount image install found no app files
+// at _000. Each root is the folder /<name> was before elevation: by the descriptor held
+// across it, else by its identity among the title's sandboxes. Without either, an app root must
+// hold the eboot (the newest wins, ShadowMount's /system_ex/app/<TITLE> among them), and the old
+// guess comes last. Every rejected candidate is logged.
+void sandbox_root(const char* name, const Before& before, char* out, std::size_t size) {
   char path[256];
   std::snprintf(path, sizeof path, "/%s", name);
-  if (before && same_directory(path, *before)) {
+  if (same_directory(path, before)) {
     std::snprintf(out, size, "%s", path);
     return;
   }
+  char held[256] = "";
+  if (before.fd >= 0 && held_path(before, held, sizeof held) && same_directory(held, before)) {
+    std::snprintf(out, size, "%s", held);
+    return;
+  }
+  if (before.fd >= 0) hui::sys::log("[PS5-REACT] %s root not found by its descriptor: '%s' errno=%d", name, held, errno);
   const bool app = !std::strcmp(name, "app0");
   char newest[256] = "";
   time_t newest_time = 0;
   const auto consider = [&](const char* candidate) {
-    if (before && same_directory(candidate, *before)) return true;
+    if (same_directory(candidate, before)) return true;
     char marker[320];
     std::snprintf(marker, sizeof marker, "%s/eboot.bin", candidate);
     struct stat found;
-    if (app && stat(marker, &found) == 0 && (!*newest || found.st_mtime > newest_time)) {
+    const bool has_eboot = app && stat(marker, &found) == 0;
+    if (has_eboot && (!*newest || found.st_mtime > newest_time)) {
       std::snprintf(newest, sizeof newest, "%s", candidate);
       newest_time = found.st_mtime;
     }
-    hui::sys::log("[PS5-REACT] %s root candidate rejected: %s", name, candidate);
+    hui::sys::log("[PS5-REACT] %s root candidate rejected: %s%s", name, candidate, has_eboot ? " (holds eboot.bin)" : "");
     return false;
   };
   constexpr std::size_t prefix = sizeof PS5_REACT_TITLE - 1;
@@ -164,7 +191,10 @@ void sandbox_root(const char* name, const struct stat* before, char* out, std::s
       return;
     }
   }
-  if (app) consider("/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0");
+  if (app) {
+    consider("/system_ex/app/" PS5_REACT_TITLE);
+    consider("/mnt/sandbox/pfsmnt/" PS5_REACT_TITLE "-app0");
+  }
   if (*newest) {
     std::snprintf(out, size, "%s", newest);
   } else {
@@ -182,12 +212,15 @@ void initialize_filesystem_access() {
   host_platform_prepare_filesystem_access();
   const char* names[] = {"app0", "download0", "temp0"};
   char* roots[] = {app_root, data_root, temp_root};
-  struct stat before[3];
-  bool known[3];
+  Before before[3];
   for (int i = 0; i < 3; ++i) {
     char path[32];
     std::snprintf(path, sizeof path, "/%s", names[i]);
-    known[i] = stat(path, &before[i]) == 0;
+    before[i].fd = open(path, O_RDONLY | O_DIRECTORY, 0);
+    if (before[i].fd >= 0 && stat(path, &before[i].identity) != 0) {
+      close(before[i].fd);
+      before[i].fd = -1;
+    }
   }
   const auto status = [] {
     Network network;
@@ -198,9 +231,12 @@ void initialize_filesystem_access() {
   }();
   hui::sys::log("[PS5-REACT] filesystem access status=%u path=%s",
                 static_cast<unsigned>(status), elevation::path());
+  if (status == elevation::Status::ok)
+    for (int i = 0; i < 3; ++i) sandbox_root(names[i], before[i], roots[i], sizeof app_root);
+  for (const Before& held : before)
+    if (held.fd >= 0) close(held.fd);
   if (status != elevation::Status::ok) return;
   console_access = true;
-  for (int i = 0; i < 3; ++i) sandbox_root(names[i], known[i] ? &before[i] : nullptr, roots[i], sizeof app_root);
   remove_legacy_image_cache();
   if (!writable(data_root)) {
     hui::sys::log("[PS5-REACT] data root not writable path=%s errno=%d; trying title data", data_root, errno);
