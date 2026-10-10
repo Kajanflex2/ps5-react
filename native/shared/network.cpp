@@ -583,6 +583,7 @@ public:
   std::uint32_t enqueue(Request request, std::string& error);
   void cancel(std::uint32_t id);
   std::vector<Snapshot> poll();
+  bool running() const { return running_; }
 private:
   std::mutex mutex_, disk_mutex_;
   std::condition_variable wake_, disk_wake_, sync_wake_;
@@ -1519,6 +1520,7 @@ std::uint32_t enqueue(Request request, std::string& error) { return service.enqu
 void cancel(std::uint32_t id) { service.cancel(id); }
 std::vector<Snapshot> poll() { return service.poll(); }
 bool downloading() { return downloading_file; }
+bool running() { return service.running(); }
 const char* version() { return curl_version(); }
 } // namespace network
 #else
@@ -1531,6 +1533,7 @@ std::uint32_t enqueue(Request, std::string& error) {
 void cancel(std::uint32_t) {}
 std::vector<Snapshot> poll() { return {}; }
 bool downloading() { return false; }
+bool running() { return false; }
 const char* version() { return "disabled"; }
 bool configure_transport(void*, const std::string&, bool) { return false; }
 } // namespace network

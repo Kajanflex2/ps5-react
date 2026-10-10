@@ -257,6 +257,16 @@ when focus left it: the user felt L2 resist from about 40% of its travel and go 
 outside the keyboard. `scePadSetTriggerEffect` logged no error (the host logs only a nonzero
 result). R2, other strengths and positions, and the release when the app quits were not checked.
 
+## LAN broadcast (LocalNetwork) — 2026-10-10
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus 1.7beta4, on the same LAN as a
+Jellyfin-compatible server, a development build of a private app (not in this repository) from
+uncommitted changes, driven by `dev/input-script.txt`. `LocalNetwork.broadcast({port: 7359,
+message: 'who is JellyfinServer?'})` got the server's reply on the PS5: the app's sign-in screen
+listed it, from the reply's sender address, and a confirm on that entry signed in. One server,
+one reply; cancellation, `maxReplies`, several concurrent queries and a network without a
+responder were not checked on the console.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

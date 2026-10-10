@@ -43,6 +43,8 @@ void cancel(std::uint32_t id);
 std::vector<Snapshot> poll();
 // True while a download to a file runs; image loading yields connections and memory to it.
 bool downloading();
+// True once start() succeeded: the platform's network stack (PS5: libSceNet) is up.
+bool running();
 const char* version();
 // Applies the transport policy every request shares (protocols, redirects, TLS trust, timeouts,
 // identity encoding and the PS5 socket options) to a libcurl easy handle.

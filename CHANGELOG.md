@@ -183,6 +183,10 @@
 
 ## Unreleased
 
+- Add `LocalNetwork.broadcast({port, message})` (native ABI v9): a UDP broadcast on the local
+  network whose replies come back with their sender's address, for service discovery such as
+  Jellyfin's `who is JellyfinServer?` on port 7359 (docs/NATIVE-API.md).
+
 - `VirtualList` takes a `ref` whose `focusIndex(index)` scrolls to and focuses any item, including
   rows that are not mounted yet (docs/LISTS.md). The jump scrolls at once, and focus recovery waits
   for it instead of moving focus out of the list when the focused row unmounts.

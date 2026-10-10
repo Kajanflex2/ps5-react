@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Archives, BrowserCapture, Controller, Downloads, Http, Power, Sound} from './native.js';
+import {acquireImage, Archives, BrowserCapture, Controller, Downloads, Http, LocalNetwork, Power, Sound} from './native.js';
 import {setFrameBatcher} from './frame.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
@@ -263,6 +263,39 @@ test('browser capture delivers only its result and cancellation rejects as Abort
     second.cancel(); assert.deepEqual(cancelled, [2]);
     snapshots = [{id: 2, state: 'cancelled'}]; tick();
     await assert.rejects(second.done, {name: 'AbortError'});
+  } finally {
+    globalThis.setInterval = originalInterval; globalThis.clearInterval = originalClear;
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('a LAN broadcast resolves with its replies, and an abort cancels it', async () => {
+  const originalInterval = globalThis.setInterval, originalClear = globalThis.clearInterval;
+  let tick, snapshots = [], next = 1;
+  const calls = [], cancelled = [];
+  globalThis.setInterval = callback => { tick = callback; return 1; };
+  globalThis.clearInterval = () => {};
+  globalThis.__ps5ReactNative = {lan: {
+    broadcast: (...args) => { calls.push(args); return next++; },
+    poll: () => { const result = snapshots; snapshots = []; return result; },
+    cancel: id => cancelled.push(id),
+  }};
+  try {
+    const found = LocalNetwork.broadcast({port: 7359, message: 'who is JellyfinServer?'});
+    assert.deepEqual(calls, [[7359, 'who is JellyfinServer?', 1500, 16]]);
+    snapshots = [{id: 1, state: 'completed', error: '', replies: [{address: '192.168.0.10', port: 7359, body: '{"Id":"a"}'}]}];
+    tick();
+    assert.deepEqual(await found, [{address: '192.168.0.10', port: 7359, text: '{"Id":"a"}'}]);
+
+    const listeners = new Set();
+    const signal = {aborted: false, addEventListener: (_, fn) => listeners.add(fn), removeEventListener: (_, fn) => listeners.delete(fn)};
+    const second = LocalNetwork.broadcast({port: 7359, message: 'who is EmbyServer?', timeoutMs: 800, signal});
+    for (const listener of listeners) listener();
+    assert.deepEqual(cancelled, [2]);
+    snapshots = [{id: 2, state: 'cancelled', error: '', replies: []}];
+    tick();
+    await assert.rejects(second, {name: 'AbortError'});
+    assert.equal(listeners.size, 0);
   } finally {
     globalThis.setInterval = originalInterval; globalThis.clearInterval = originalClear;
     delete globalThis.__ps5ReactNative;

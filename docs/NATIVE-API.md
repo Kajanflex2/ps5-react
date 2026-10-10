@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v8) is
+each host installs before the bundle runs. Its exact shape (ABI v9) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -149,6 +149,27 @@ there are no additional global native functions.
 PS5 builds require `networking: true` and `filesystemAccess: "console"`; desktop
 networking is available by default. See [NETWORKING.md](NETWORKING.md) for
 options, resource limits, errors, lifecycle and the hardware-validation gap.
+
+## LocalNetwork (ABI v9)
+
+`LocalNetwork.broadcast({port, message, timeoutMs, maxReplies, signal})` sends one UDP
+datagram to `255.255.255.255:port` and resolves with the replies gathered for
+`timeoutMs` (100–10000, default 1500) or until `maxReplies` (1–64, default 16) arrive:
+`[{address, port, text}]`, where `address` is the sender's IPv4 address. It is for
+service discovery, such as Jellyfin's:
+
+```js
+import {LocalNetwork} from '@ps5-react/core';
+const replies = await LocalNetwork.broadcast({port: 7359, message: 'who is JellyfinServer?'});
+```
+
+The query runs on a native worker of its own; the bridge (`lan.broadcast`, `lan.cancel`,
+`lan.poll`) only submits, cancels and polls. Messages are at most 1 KiB and each reply
+is cut at 4 KiB; four queries run at a time, and a fifth throws. A `signal` cancels the
+query and rejects with an `AbortError`. Anyone on the network can reply with anything:
+check a reply against its sender before using an address it names. It needs
+`networking: true` (and on PS5 `filesystemAccess: "console"`), like HTTP. Only IPv4
+limited broadcast is sent; multicast (SSDP, mDNS) and unicast UDP are not available.
 
 ## Images
 
@@ -383,7 +404,7 @@ directory or select **Refresh** to query again; focus changes do not query stora
 
 ## Not yet available
 
-- Global `fetch`, raw sockets and WebSocket.
+- Global `fetch`, raw sockets, multicast and WebSocket (UDP broadcast queries: `LocalNetwork`).
 - Music, streamed or long audio, and decoding compressed formats at run time.
 - The system on-screen keyboard (IME) for text input.
 - System save data; use `FileSystem.dataDir` for now.

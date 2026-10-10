@@ -7,6 +7,7 @@
 #include "archives.hpp"
 #include "packages.hpp"
 #include "browser_capture.hpp"
+#include "lan.hpp"
 #include "render_workers.hpp"
 #include "thread_name.hpp"
 #include "app_config.hpp"
@@ -466,6 +467,7 @@ bool run_proof() {
   ps5_react_stop_images();
   archives::stop();
   browser_capture::stop();
+  lan::stop();
   packages::stop();
   network::stop();
   if (runtime) er_runtime_shutdown();

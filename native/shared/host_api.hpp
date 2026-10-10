@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v8) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v9) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -57,6 +57,12 @@
 //   browser.capture(prefix, suffix, timeoutSeconds) ABI v7; filename-bound Vikingfile capture task
 //   browser.cancel(id)            stops the read-only payload by closing its connection
 //   browser.poll()                state/error/url; consumes terminal results
+//   lan.broadcast(port, message, timeoutMs, maxReplies) ABI v9; task ID; one UDP datagram to
+//                                  255.255.255.255:port, replies gathered off-thread for 100..10000 ms
+//                                  (at most 64, 4 KiB each); four queries at a time; needs networking
+//   lan.cancel(id)                 stops gathering; the replies so far are kept
+//   lan.poll()                     [{id, state, error, replies: [{address, port, body}]}] finished
+//                                  since the last poll; state 'completed' | 'failed' | 'cancelled'
 //   packages.install(path, name)   task ID; installs a .pkg under /data, /mnt/usb or /mnt/ext through the
 //                                  console's install service (PS5 only, needs the payload loader on 9021)
 //   packages.cancel(id)            stops reporting; an install the console accepted carries on
@@ -197,3 +203,5 @@ JSValue ps5_react_package_api(JSContext* ctx);
 
 // ABI v7: filename-bound browser capture tasks (PS5 only).
 JSValue ps5_react_browser_capture_api(JSContext* ctx);
+// ABI v9: UDP broadcast queries on the local network (lan.hpp).
+JSValue ps5_react_lan_api(JSContext* ctx);

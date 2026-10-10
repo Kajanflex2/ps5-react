@@ -384,6 +384,38 @@ export const Packages = Object.freeze({
   },
 });
 
+/**
+ * UDP broadcast on the local network, for finding services that answer one (Jellyfin and Emby on
+ * 7359, for instance). Replies come from anyone on the network: check what they claim before use.
+ */
+export const LocalNetwork = Object.freeze({
+  /**
+   * Sends `message` to every host on the network at `port` and gathers the replies for `timeoutMs`
+   * (100–10000) or until `maxReplies` (1–64) arrive.
+   * @param {{port: number, message: string, timeoutMs?: number, maxReplies?: number,
+   *   signal?: {aborted: boolean, addEventListener: Function, removeEventListener: Function}}} options
+   * @returns {Promise<ReadonlyArray<{address: string, port: number, text: string}>>} `address` is the sender's IPv4
+   */
+  async broadcast({port, message, timeoutMs = 1500, maxReplies = 16, signal}) {
+    if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
+      throw new TypeError('LocalNetwork.broadcast: signal must support abort event listeners');
+    }
+    const id = host().lan.broadcast(port, message, timeoutMs, maxReplies);
+    const task = networkTask(id, `LocalNetwork.broadcast ${port}`, '', 'lan');
+    const abort = () => task.cancel();
+    if (signal) {
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, {once: true});
+    }
+    try {
+      const {replies} = await task.done;
+      return Object.freeze(replies.map(reply => Object.freeze({address: reply.address, port: reply.port, text: reply.body})));
+    } finally {
+      if (signal) signal.removeEventListener('abort', abort);
+    }
+  },
+});
+
 /** Read-only, filename-bound Vikingfile capture on PS5; no browser data is retained. */
 export const BrowserCapture = Object.freeze({
   capture({prefix = 'https://vikingfile.com/d/', suffix, timeoutSeconds = 180}) {
