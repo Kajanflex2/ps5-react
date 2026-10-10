@@ -213,6 +213,26 @@ def main():
   p=root/"plain.rar";p.write_bytes(plain_rar5("nested/deeper/game.ffpfsc",DATA))
   assert run("rar-plain",[p])[0]=="completed"
   assert (root/"rar-plain/game.ffpfsc").read_bytes()==DATA
+  # The phase goes from extracting to finishing once every entry is decoded, and a completed task ends in it:
+  # through the write ring (files synced of the total), inline writes, rar-extract's "s" line, and an older
+  # rar-extract without that line.
+  def phases(name,parts,password=None,**env):
+   done=subprocess.run([str(binary),str(root/name),str(1024*1024),*map(str,parts),*([] if password is None else ["--password",password])],capture_output=True,text=True,timeout=20,env={**os.environ,"ARCHIVE_PHASES":"1","ARCHIVE_TRACE":"1",**env})
+   seen=[line[6:] for line in done.stderr.splitlines() if line.startswith("phase ")]
+   assert done.stdout.splitlines()[0]=="completed" and seen[-1]=="finishing" and seen[0] in ("extracting","finishing"),(done.stdout,seen)
+   return done.stderr
+  several=root/"several.zip"
+  with zipfile.ZipFile(several,"w") as z:
+   for i in range(5):z.writestr(f"dir/file{i}.bin",DATA[i:i+100000])
+  assert "synced 5/5" in phases("phase-ring",[several])
+  assert "synced 0/0" in phases("phase-inline",[several],ARCHIVE_PIPELINE_BYTES="0")
+  rar_phases=phases("phase-rar",[root/"plain.rar"])
+  # rar-extract reads what the set unpacks to from its headers before extracting; libarchive cannot.
+  assert "rar worker finishing" in rar_phases and f"total {len(DATA)}" in rar_phases
+  assert "total 0" in phases("phase-total-zip",[several])
+  older=root/"older-worker";older.write_text(f"#!/bin/sh\n'{os.environ['PS5_REACT_RAR_WORKER']}' | grep --line-buffered -vx s\n");older.chmod(0o755)
+  assert "rar worker finishing" not in phases("phase-older-rar",[root/"plain.rar"],PS5_REACT_RAR_WORKER=str(older))
+  assert (root/"phase-older-rar/game.ffpfsc").read_bytes()==DATA
   for name,entry,link in [("rar-traversal","../escape",None),("rar-absolute","/escape",None),("rar-backslash","a\\..\\..\\escape",None),
                           ("rar-dotdot-inner","a/../../escape",None),("rar-reserved","x/.ps5-react-extraction",None),("rar-symlink","link","../escape")]:
    p=root/(name+".rar");p.write_bytes(plain_rar5(entry,DATA,link))
@@ -224,6 +244,15 @@ def main():
   assert result[0]=="failed" and "missing volume" in result[-1],result
   result=run("rar-no-password",real)
   assert result[0]=="failed" and "password" in result[-1],result
+  # Headers encrypted, one file across four volumes: counted once, its whole size.
+  assert f"total {len(words())}" in phases("rar-real-total",real,password="fixture-password")
+  # A volume cut short is named, so the app downloads that one again.
+  cut=[root/f"cut-{i}.rar" for i in range(len(real))]
+  for i,copy in enumerate(cut):copy.write_bytes(real[i].read_bytes())
+  cut[1].write_bytes(cut[1].read_bytes()[:-3000])
+  result=run("rar-cut-volume",cut,password="fixture-password")
+  assert result[0]=="failed" and result[-1].endswith("Volume 2 of 4 looks incomplete."),result
+  assert "Volume 3 of 3 looks incomplete." in run("rar-missing-volume-named",[real[0],real[1],real[3]],password="fixture-password")[-1]
   # Real archive split byte stream: ordered volumes, no temporary joined copy.
   blob=tar.read_bytes();parts=[]
   for i in range(3):

@@ -74,6 +74,10 @@ void fail(Job& job, const std::string& error) {
   job.snapshot.error = error;
   job.snapshot.state = job.cancelled ? "cancelled" : "failed";
 }
+void enter(Job& job, const char* phase) {
+  std::lock_guard lock(job.mutex);
+  job.snapshot.phase = phase;
+}
 template <std::size_t count>
 bool has_extension(const std::string& path, const std::array<std::string_view, count>& extensions) {
   return std::any_of(extensions.begin(), extensions.end(), [&](std::string_view extension) { return path.ends_with(extension); });
@@ -615,6 +619,14 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
         job.snapshot.written = std::min(written, job.request.max_bytes);
       } else if (line.starts_with("f ")) {
         if (const auto refusal = rar_file(job, staging, line.substr(2), total, receipt); !refusal.empty() && error.empty()) error = refusal;
+      } else if (line.starts_with("d ")) {
+        const std::uint64_t declared = std::strtoull(line.c_str() + 2, nullptr, 10);
+        std::lock_guard lock(job.mutex);
+        job.snapshot.total = std::min(declared, job.request.max_bytes);
+      } else if (line == "s" && !cancel_sent) {
+        // Every file is decoded; the worker is writing out and syncing what it still holds.
+        trace("rar worker finishing");
+        enter(job, "finishing");
       } else if (line.starts_with("t ")) {
         timings = line.substr(1);
       } else if (line == "ok" || line == "cancelled" || line.starts_with("fail ")) {
@@ -760,6 +772,7 @@ void run(const std::shared_ptr<Job>& pointer) {
   {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
+    job.snapshot.phase = "extracting";
   }
   // RAR sets go to rar-extract; everything else, and RAR when the worker cannot start, to libarchive. Only
   // the worker waits for volumes: a streamed set it cannot take fails with nothing written, and the app
@@ -782,7 +795,12 @@ void run(const std::shared_ptr<Job>& pointer) {
       if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get(), pipelined ? &writer : nullptr);
       const auto decoded_us = elapsed_us(started), cpu_us = thread_cpu_us() - cpu_started;
       // On an error or cancel the writer's destructor drops what is queued and closes every file.
-      if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt);
+      if (error.empty() && !job.cancelled) enter(job, "finishing");
+      if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt, [&](std::size_t synced, std::size_t total) {
+        std::lock_guard lock(job.mutex);
+        job.snapshot.synced = synced;
+        job.snapshot.sync_total = total;
+      });
       // Where the time went, to tell decoding, the decoder thread not being scheduled (CPU time well under
       // its wall time with little waiting), writes and fsyncs apart on the console.
       const auto& t = job.timings;
@@ -799,6 +817,8 @@ void run(const std::shared_ptr<Job>& pointer) {
     trace("read", error.c_str());
     archive_read_free(archive);
   }
+  // A RAR worker from before the "s" line never said it was finishing.
+  if (error.empty() && !job.cancelled) enter(job, "finishing");
   if (error.empty() && !job.cancelled && request.stream) {
     // Every volume exists now: the receipt names them as a run after the download would.
     const auto full = input_identity(request);

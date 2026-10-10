@@ -12,7 +12,15 @@ inline constexpr std::size_t max_metadata_bytes = 16 * 1024 * 1024;
 // `stream`: a RAR set whose later volumes are still downloading. Only the first exists yet; each next one is
 // read once its final name appears.
 struct Request { std::vector<std::string> sources; std::string destination, password; std::uint64_t max_bytes = 1024ULL*1024*1024*1024; bool stream = false; };
-struct Snapshot { std::uint32_t id = 0; std::string state = "queued", error, destination; std::uint64_t written = 0, entries = 0; std::vector<std::string> artifacts; };
+// While extracting, `phase` is "extracting" until every entry is decoded, then "finishing" while the files
+// are flushed and synced and the set is published. `synced` of `sync_total` files are on disk then, both 0
+// where the writer cannot tell (inline writes, the RAR worker). `total` is what the files unpack to, once
+// known before they are written (the RAR worker reads it from every volume's headers), else 0.
+struct Snapshot {
+  std::uint32_t id = 0; std::string state = "queued", error, destination, phase;
+  std::uint64_t written = 0, total = 0, entries = 0, synced = 0, sync_total = 0;
+  std::vector<std::string> artifacts;
+};
 std::uint32_t enqueue(Request request, std::string& error);
 void cancel(std::uint32_t id);
 std::vector<Snapshot> poll();

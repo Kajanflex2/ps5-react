@@ -256,7 +256,7 @@ std::string Writer::readback(const std::string& file) {
 }
 
 // Every file is on disk before the receipt: inputs are deleted once extraction completes.
-void Writer::sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next) {
+void Writer::sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next, std::atomic<std::size_t>& synced_files, const Progress& progress) {
   name_thread("archive-sync");
   for (std::size_t index; !failed() && (index = next++) < lines.size();) {
     const auto at = receipt_.find('|', lines[index]) + 1;
@@ -275,6 +275,7 @@ void Writer::sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::s
     timings_.sync_us += elapsed_us(syncing);
     ++timings_.syncs;
     if (!synced) fail(std::strerror(error));
+    else if (progress) progress(++synced_files, lines.size());
   }
 }
 
@@ -290,16 +291,17 @@ void Writer::stop_threads() {
   ring_ = nullptr;
 }
 
-std::string Writer::finish(std::string& receipt) {
+std::string Writer::finish(std::string& receipt, const Progress& progress) {
   stop_threads();
   std::vector<std::size_t> lines;
   for (std::size_t at = 0; at < receipt_.size(); at = receipt_.find('\n', at) + 1) lines.push_back(at);
-  std::atomic<std::size_t> next{0};
+  std::atomic<std::size_t> next{0}, synced{0};
+  if (progress && !failed()) progress(0, lines.size());
   // Without threads, the files are synced here, one after another.
   std::array<WorkerThread, syncers> threads;
   for (auto& thread : threads)
-    if (!failed() && lines.size() > 1) thread.start([&] { sync_loop(lines, next); }, thread_stack);
-  sync_loop(lines, next);
+    if (!failed() && lines.size() > 1) thread.start([&] { sync_loop(lines, next, synced, progress); }, thread_stack);
+  sync_loop(lines, next, synced, progress);
   for (auto& thread : threads) thread.join();
   if (cancelled_) return {};
   if (failed_ || aborted_) return error_.empty() ? "Extraction stopped." : error_;
