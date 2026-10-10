@@ -325,7 +325,7 @@ bool run_proof() {
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
-    async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
+    async_log::write("[PS5-REACT] timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
     std::uint64_t frames = 0;
     InputScript script;
@@ -351,7 +351,6 @@ bool run_proof() {
       }
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
-      if (input.is_pressed(hui::Action::menu)) break;
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
       host_platform_tick(now);
       ps5_react_set_gamepad(gamepad_state(input));
