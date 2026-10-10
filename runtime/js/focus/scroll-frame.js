@@ -38,8 +38,10 @@ export function createFrame(parent) {
      * @param {import('./geometry.js').Rect} rect pre-scroll, like `viewport`
      * @param {import('./geometry.js').Rect | null} anchor its `scrollAnchor` ancestor in this frame, aligned
      *   on a vertical frame's y axis; the x axis and horizontal frames always move the least
+     * @param {{instant?: boolean}} [options] `instant` moves there now instead of easing (a jump far
+     *   down a list, whose rows on the way could not all mount)
      */
-    reveal(rect, anchor) {
+    reveal(rect, anchor, {instant = false} = {}) {
       const {viewport, handle} = frame;
       if (!viewport || handle == null) return;
       const [fromX, fromY, maxX, maxY] = NativeUI.scrollTo(handle, NaN, NaN);
@@ -48,12 +50,20 @@ export function createFrame(parent) {
       const y = anchor && !frame.props.horizontal
         ? anchorOffset(frame.y, rect.y - viewport.y, rect.height, anchor.y - viewport.y, viewport.height, maxY, margin)
         : revealOffset(frame.y, rect.y - viewport.y, rect.height, viewport.height, maxY, margin);
-      if (x === frame.x && y === frame.y) return;
-      frame.x = x;
-      frame.y = y;
-      frame.animate(fromX, fromY, x, y);
+      if (instant) {
+        frame.stop();
+        const [atX, atY] = NativeUI.scrollTo(handle, Math.round(x), Math.round(y));
+        frame.x = Math.round(atX);
+        frame.y = Math.round(atY);
+        frame.position = [frame.x, frame.y];
+      } else {
+        if (x === frame.x && y === frame.y) return;
+        frame.x = x;
+        frame.y = y;
+        frame.animate(fromX, fromY, x, y);
+      }
       frame.notify();
-      frame.props.onScrollTarget?.({x, y});
+      frame.props.onScrollTarget?.({x: frame.x, y: frame.y});
     },
     // A new target while scrolling only moves the target; the steps carry on at the current speed.
     animate(fromX, fromY, toX, toY) {

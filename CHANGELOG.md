@@ -183,6 +183,9 @@
 
 ## Unreleased
 
+- `VirtualList` takes a `ref` whose `focusIndex(index)` scrolls to and focuses any item, including
+  rows that are not mounted yet (docs/LISTS.md). The jump scrolls at once, and focus recovery waits
+  for it instead of moving focus out of the list when the focused row unmounts.
 - Add `Controller.setTriggerResistance(trigger, strength, from)` (native ABI v8): DualSense
   adaptive trigger resistance from a point of the travel on, in eight strengths, through
   `scePadSetTriggerEffect` (`patches/platform-trigger-effect.patch`). The triggers are released when

@@ -3,7 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // A windowed list or grid inside a ScrollView: only the rows around the viewport and the focused
 // element are mounted; spacers stand in for the rest. See docs/LISTS.md.
-import {createElement, Fragment, memo, useContext, useLayoutEffect, useReducer, useRef} from 'react';
+import {createElement, forwardRef, Fragment, memo, useContext, useImperativeHandle, useLayoutEffect, useReducer,
+  useRef} from 'react';
 import {View} from 'embedded-react';
 import {onFrame} from '../frame.js';
 import {FrameContext, manager} from './runtime.js';
@@ -14,6 +15,8 @@ import {nearEnd, rebase, recycleSlots, stepRange, windowRows} from './window.js'
 const SPAN_PX = 24576;
 // Rows kept between the mounted rows and an edge of the represented span before it re-centres.
 const REBASE_MARGIN = 2;
+// Frames focusIndex waits for its target to mount and lay out before it gives up.
+const FOCUS_WAIT_FRAMES = 120;
 
 const same = (a, b) => a[0] === b[0] && a[1] === b[1];
 
@@ -63,10 +66,11 @@ const Row = memo(function Row({row, count, data, columns, renderItem, keyExtract
  * Renders the rows of `data` near the viewport of the enclosing ScrollView and near focus. Rows ahead
  * of the scroll mount over several frames, `maxItemsPerFrame` items at a time. While focus is outside
  * the list, rows on screen fill a whole row a frame from the top, so a list that mounts or gets new data
- * spreads its mount across frames.
+ * spreads its mount across frames. The ref's `focusIndex(index)` scrolls to any item, mounted or not,
+ * and focuses it once it is laid out (an A–Z jump).
  * @param {VirtualListProps} props
  */
-export function VirtualList(props) {
+export const VirtualList = forwardRef(function VirtualList(props, ref) {
   const frame = useContext(FrameContext);
   if (!frame) throw new Error('VirtualList: place it inside a ScrollView, which it windows against');
   const {data, renderItem, keyExtractor, numColumns = 1, recycle = false} = props;
@@ -86,6 +90,7 @@ export function VirtualList(props) {
       props, rows, stride, layout: null, range: [0, initial],
       filling: new Map(Array.from({length: Math.max(0, initial - 1)}, (_, i) => [i + 1, 0])),
       base: 0, scroll: 0, direction: 1, slots: new Map(), stepping: null, endFor: -1, required: null, desired: null,
+      pending: null, unclaim: null,
       span: () => Math.max(1, Math.floor(SPAN_PX / list.stride)),
       /** The row of the focused element when it is in this list, else -1. */
       focusedRow() {
@@ -112,7 +117,9 @@ export function VirtualList(props) {
           list.scroll = frame.y;
         }
         const {overscan = 2, onEndReached, onEndReachedThreshold = 1} = list.props;
-        const window = () => windowRows({...list.geometry(), from: list.position(), focusedRow: list.focusedRow(),
+        // During a jump the target row stands in for focus, which is still on the row being left.
+        const focusedRow = () => (list.pending ? list.pending.row : list.focusedRow());
+        const window = () => windowRows({...list.geometry(), from: list.position(), focusedRow: focusedRow(),
           direction: list.direction, ahead: overscan, behind: 1});
         ({required: list.required, desired: list.desired} = window());
         const base = rebase(list.base, list.desired, list.rows, list.span(), REBASE_MARGIN);
@@ -166,7 +173,54 @@ export function VirtualList(props) {
        * Once a frame: the window's edges move a row toward `desired`, entering rows starting with
        * `maxItemsPerFrame` items; or, with the edges in place, the filling row nearest focus gets more.
        */
+      /**
+       * Scrolls to item `index` and focuses it when it is laid out: re-centres the represented span if
+       * the row is outside it, scrolls there at once (an eased scroll would need every row on the way
+       * mounted, more than a span holds on a long jump), which makes the row required so it mounts
+       * whole, and checks each frame for the item's focus node. @returns {boolean} whether it started
+       */
+      focusIndex(index) {
+        if (!list.layout || !frame.viewport || list.rows === 0) return false;
+        const columns = list.props.numColumns ?? 1;
+        const target = Math.max(0, Math.min(list.props.data.length - 1, Math.floor(index)));
+        const row = Math.floor(target / columns);
+        const base = rebase(list.base, [row, row + 1], list.rows, list.span(), REBASE_MARGIN);
+        // The jump can unmount the focused row; focus waits for the target rather than recovering.
+        list.unclaim?.();
+        list.unclaim = manager.claimFocus(list);
+        if (base !== list.base) list.move(base);
+        list.pending = {row, column: target % columns, frames: 0};
+        const {x, y, width} = list.layout;
+        frame.reveal({x, y: y + (row - list.base) * list.stride, width, height: list.height}, null, {instant: true});
+        list.update();
+        if (!list.stepping) list.stepping = onFrame(list.step);
+        list.focusPending();
+        return true;
+      },
+      /** Focuses the pending item if its row has laid out; the item's first focus node, by position. */
+      focusPending() {
+        const {row, column} = list.pending;
+        const columns = list.props.numColumns ?? 1;
+        const {x, width} = list.layout;
+        const top = list.layout.y + (row - list.base) * list.stride;
+        const nodes = [];
+        for (const node of manager.nodes) {
+          const rect = node.frame === frame && !node.dead ? node.rect : null;
+          if (rect && rect.y >= top && rect.y < top + list.stride && rect.x >= x && rect.x < x + width) nodes.push(node);
+        }
+        // Items left to right; within one item (nested focusables) the first one.
+        nodes.sort((a, b) => a.rect.x - b.rect.x || a.rect.y - b.rect.y);
+        const itemWidth = width / columns;
+        const node = nodes.find(candidate => Math.floor((candidate.rect.x - x) / itemWidth) === column);
+        if ((node && manager.focus(node)) || ++list.pending.frames > FOCUS_WAIT_FRAMES) list.endPending();
+      },
+      endPending() {
+        list.pending = null;
+        list.unclaim?.();
+        list.unclaim = null;
+      },
       step() {
+        if (list.pending) list.focusPending();
         const columns = list.props.numColumns ?? 1;
         const batch = list.props.maxItemsPerFrame ?? 1;
         // Required rows still filling come first, whole and top down.
@@ -185,7 +239,7 @@ export function VirtualList(props) {
           if (count + batch >= columns) list.filling.delete(row);
           else list.filling.set(row, count + batch);
         } else {
-          list.stopStepping();
+          if (!list.pending) list.stopStepping();
           return;
         }
         rerender();
@@ -214,7 +268,8 @@ export function VirtualList(props) {
     self.current = list;
   }
   const list = self.current;
-  Object.assign(list, {props, rows, stride});
+  Object.assign(list, {props, rows, stride, height});
+  useImperativeHandle(ref, () => ({focusIndex: index => list.focusIndex(index)}), []);
 
   useLayoutEffect(() => {
     frame.listeners.add(list.update);
@@ -223,6 +278,7 @@ export function VirtualList(props) {
       frame.listeners.delete(list.update);
       unsubscribe();
       list.stopStepping();
+      list.unclaim?.();
     };
   }, []);
   // New data or sizes move the window; a longer list may also call onEndReached again.
@@ -246,4 +302,4 @@ export function VirtualList(props) {
     children.push(createElement(View, {key: 'after', style: {height: after}}));
   }
   return createElement(View, {style: props.style, onLayout: list.onLayout}, children);
-}
+});

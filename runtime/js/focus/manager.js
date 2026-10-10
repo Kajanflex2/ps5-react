@@ -62,6 +62,27 @@ export class FocusManager {
     /** @type {Set<() => void>} */
     this.listeners = new Set();
     this.order = 0;
+    /** @type {Set<object>} owners about to focus something that is still mounting */
+    this.claims = new Set();
+    /** What recovery would have started from while a claim held it off. */
+    this.lostWhileClaimed = null;
+  }
+
+  /**
+   * Holds focus recovery and D-pad moves from nowhere off while `owner` (a VirtualList jumping to an
+   * item it is still mounting) is about to focus something: otherwise the focused row unmounting
+   * under the jump sends focus to whatever survives nearest, often another page's tab. The returned
+   * release recovers as usual if nothing took focus meanwhile.
+   * @param {object} owner @returns {() => void} release
+   */
+  claimFocus(owner) {
+    this.claims.add(owner);
+    return () => {
+      if (!this.claims.delete(owner) || this.claims.size || this.focused) return;
+      const lost = this.lostWhileClaimed;
+      this.lostWhileClaimed = null;
+      if (lost) this.recover(lost);
+    };
   }
 
   /** @param {Scope | null} parent @param {ScopeProps} props @returns {Scope} */
@@ -160,7 +181,7 @@ export class FocusManager {
   /** @param {Direction} direction @returns {boolean} whether focus moved */
   move(direction) {
     const current = this.focused;
-    if (!current) return this.focus(this.root);
+    if (!current) return this.claims.size ? false : this.focus(this.root);
     const override = current.props[NEXT[direction]];
     if (override != null) return this.focus(override);
     const from = screenRect(current);
@@ -291,6 +312,11 @@ export class FocusManager {
   /** After the focused node unmounted: a dead scope's previous focus, else the nearest survivor. */
   recover(lost) {
     if (this.focused) return;
+    if (this.claims.size) {
+      this.lostWhileClaimed = lost;
+      return;
+    }
+    this.lostWhileClaimed = null;
     const target = this.fallback(lost);
     if (target) this.setFocus(target);
     else for (const listener of this.listeners) listener();

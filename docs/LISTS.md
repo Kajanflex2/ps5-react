@@ -64,6 +64,14 @@ Lengths are logical px of a 1280-wide layout, like class names.
 | `recycle` | Reuse leaving rows for entering ones (same elements, new items) instead of unmounting and mounting |
 | `style`, `className` | The list's own box |
 
+`ref.current.focusIndex(index)` scrolls to any item, mounted or not, and focuses it once its row has
+mounted and laid out (an A–Z jump, a "jump to" menu). It re-centres the represented span first when the
+row is outside it and scrolls there at once rather than easing: an eased scroll passes every row on the
+way, and a long jump passes more than a span holds. It gives up after two seconds without a focusable
+element at that position. Until then it holds focus recovery off, so the focused row unmounting under
+the jump does not send focus elsewhere (another page's tab), and D-pad presses report `blocked`. It
+focuses the first focus node of the item, by position; it returns `false` before the list's first layout.
+
 ## How the window moves
 
 1. **What must be mounted now** (`required`): rows overlapping the viewport of
@@ -108,7 +116,7 @@ mounted, so focus arriving from the content above or below finds them.
   document order. Focus tie-breaks and a scope's first element follow mount
   order, not item order.
 - Unmounted items have no focus node: `focus(key)` and `nextFocus*` cannot
-  reach an item outside the window.
+  reach an item outside the window; use `focusIndex` for that.
 - A recycled row keeps its components' state: reset state that belongs to the
   item, or key the item's state by its id.
 - Images in mounted overscan rows start loading before they scroll into view;

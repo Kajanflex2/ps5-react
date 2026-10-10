@@ -182,6 +182,36 @@ test('unmounting the focused element focuses the nearest one in its scope', () =
   assert.ok(['g01', 'g10', 'g12', 'g21'].includes(t.key()));
 });
 
+test('a focus claim holds recovery and moves off until its owner focuses', () => {
+  const t = setup();
+  t.node('tab', 0, 0);
+  const list = t.scope(t.focus.root);
+  const leaving = t.node('leaving', 0, 200, list);
+  t.focus.focus('leaving');
+  const release = t.focus.claimFocus('jump');
+  t.focus.unregister(leaving);
+  t.flush();
+  assert.equal(t.focus.focused, null, 'recovery waits for the claim');
+  assert.equal(t.focus.move('down'), false, 'a move from nowhere does not take the first element');
+  t.node('target', 0, 900, list);
+  t.focus.focus('target');
+  release();
+  assert.equal(t.key(), 'target');
+});
+
+test('releasing a claim without focusing anything recovers as usual', () => {
+  const t = setup();
+  const list = t.scope(t.focus.root);
+  t.node('neighbour', 0, 320, list);
+  const leaving = t.node('leaving', 0, 200, list);
+  t.focus.focus('leaving');
+  const release = t.focus.claimFocus('jump');
+  t.focus.unregister(leaving);
+  t.flush();
+  release();
+  assert.equal(t.key(), 'neighbour');
+});
+
 test('closing a modal returns focus to where it came from', () => {
   const t = setup();
   t.node('open', 0, 0);
