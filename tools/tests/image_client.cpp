@@ -39,6 +39,7 @@ extern "C" void* realloc(void* address, std::size_t size) {
 
 namespace {
 std::vector<std::uint32_t> evicted;
+std::atomic<std::size_t> heap_live{0};
 
 std::vector<images::Result> wait(std::size_t count, int timeout_ms) {
   std::vector<images::Result> out;
@@ -115,6 +116,40 @@ int main(int argc, char** argv) {
     std::printf("{\"loaded\":%zu,\"evicted\":%zu,\"first\":%u,\"kept\":%s}\n", results.size(), evicted.size(),
                 evicted.empty() ? 0 : evicted.front(),
                 std::find(evicted.begin(), evicted.end(), ids[0]) == evicted.end() ? "true" : "false");
+  } else if (mode == "squeeze") {
+    // 12 images of 4 MiB fit the 64 MiB budget. A memory hold trims the unused ones to 16 MiB and its
+    // end restores the budget; then heap pressure (75% of a 100 MiB probe) trims the same way, a calm
+    // heap does not, and a decode that would pass 85% is refused.
+    std::vector<std::uint32_t> ids;
+    for (int i = 0; i < 12; ++i) ids.push_back(load(url + "?n=" + std::to_string(i), 1024, 1024, 2, now));
+    const auto loaded = wait(12, 30000).size();
+    for (std::size_t i = 1; i < ids.size(); ++i) images::release(ids[i], false);
+    wait(1, 50);
+    const auto calm = evicted.size();
+    images::hold_memory(true);
+    wait(1, 50);
+    const auto held = evicted.size();
+    const auto held_decoded = images::memory().decoded >> 20;
+    images::hold_memory(false);
+    for (int i = 0; i < 8; ++i) ids.push_back(load(url + "?n=" + std::to_string(i + 1), 1024, 1024, 2, now));
+    const auto reloaded = wait(8, 30000).size();
+    for (std::size_t i = 12; i < ids.size(); ++i) images::release(ids[i], false);
+    wait(1, 50);
+    const auto restored = evicted.size() - held;
+    images::set_heap_probe([] { return images::Heap{heap_live.load(), 100 * 1024 * 1024}; });
+    heap_live = 75 * 1024 * 1024;
+    wait(1, 50);
+    const auto pressed = evicted.size() - held - restored;
+    heap_live = 50 * 1024 * 1024;
+    load(url + "?n=calm", 1024, 1024, 2, now);
+    const auto relieved = wait(1, 10000);
+    heap_live = 84 * 1024 * 1024;
+    load(url + "?n=full", 1024, 1024, 2, now);
+    const auto full = wait(1, 10000);
+    std::printf("{\"loaded\":%zu,\"calm\":%zu,\"held\":%zu,\"held_mib\":%zu,\"reloaded\":%zu,\"restored\":%zu,"
+                "\"pressed\":%zu,\"relieved\":%s,\"full\":\"%s\"}\n",
+                loaded, calm, held, held_decoded, reloaded, restored, pressed,
+                !relieved.empty() && relieved[0].ready ? "true" : "false", full.empty() ? "" : full[0].error.c_str());
   } else {
     return 2;
   }

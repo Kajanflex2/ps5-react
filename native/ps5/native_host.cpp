@@ -39,6 +39,7 @@
 #include <utility>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 extern "C" {
 #include "er_runtime.h"
@@ -66,6 +67,22 @@ std::size_t archives::pipeline_bytes() {
   hui_heap_stats(&live, &peak, &blocks, &failures);
   const std::size_t ring = size >= 256 * MiB ? 32 * MiB : size >= 192 * MiB ? 16 * MiB : 8 * MiB;
   return live + 64 * MiB + ring + 16 * MiB <= size ? ring : 0;
+}
+// The image caches drop to their low budgets for an in-process extraction (the render thread trims
+// within a frame or two; images on screen stay), then the heap must still hold the decoder budget and
+// the margin. pipeline_bytes() sizes the ring from what is left after the trim.
+bool archives::hold_memory(bool hold) {
+  images::hold_memory(hold);
+  if (!hold) return true;
+  for (int i = 0; i < 25 && images::memory().decoded > images::kLowCacheBytes; ++i) usleep(10'000);
+  constexpr std::size_t MiB = 1024 * 1024;
+  std::size_t size = 0, live = 0, peak = 0, blocks = 0, failures = 0;
+  hui_heap_capacity(&size, nullptr, nullptr);
+  hui_heap_stats(&live, &peak, &blocks, &failures);
+  const bool room = !size || live + 64 * MiB + 16 * MiB <= size;
+  async_log::write("[PS5-REACT] extraction memory: heap=%zu/%zuMiB img decoded=%zuKiB room=%d", live >> 20, size >> 20,
+                   images::memory().decoded >> 10, room);
+  return room;
 }
 bool archives::downloading() { return network::downloading(); }
 // rar-extract.elf goes to the payload loader as the package installer does, and reports on the socket.
@@ -277,6 +294,13 @@ bool run_proof() {
   }
   if (ok) {
     images::set_cache_bytes(image_cache_bytes());
+    images::set_heap_probe([] {
+      images::Heap heap;
+      std::size_t peak = 0, blocks = 0, failures = 0;
+      hui_heap_stats(&heap.live, &peak, &blocks, &failures);
+      hui_heap_capacity(&heap.size, nullptr, nullptr);
+      return heap;
+    });
     if (network::start()) ps5_react_start_images();
     async_log::write("[PS5-REACT] sound=%d at %lldms", ps5_react_start_sound(), since_launch_ms());
     ErRuntimeConfig config = {};
