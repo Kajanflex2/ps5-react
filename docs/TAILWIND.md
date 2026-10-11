@@ -82,9 +82,8 @@ physical px = round(logical px × render.width / baseWidth)
 ```
 
 `render.width` comes from `app.json`; `baseWidth` from `tailwind.config.js`
-(default 1280). The starter renders at 2560×1440, so `p-4` (16px) becomes 32px.
-An app with `"resolution": "auto"` is compiled once per layout: `p-4` becomes
-24px at 1920×1080 and 48px at 3840×2160.
+(default 1280). An app with `"resolution": "auto"`, like the starter, is compiled
+once per layout: `p-4` (16px) becomes 24px at 1920×1080 and 48px at 3840×2160.
 `w-screen`, `h-screen`, `min-w-screen`, `max-w-screen`, `min-h-screen`, and
 `max-h-screen` use the exact render width or height. Unitless values (opacity,
 z-index, flex, scale, rotation, aspect ratio, relative line height and tracking)

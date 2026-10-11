@@ -2,6 +2,10 @@
 
 ## Unreleased — resolution auto
 
+- The starter, and so every `npm run create` scaffold, uses `"resolution": "auto"` at 60 Hz. It
+  rendered at 2560×1440 into a 1920×1080 surface, which the presenter scaled down 0.75× and a 4K
+  TV upscaled again, softening text. Its pinned font sizes fit only the 2560-wide layout, so the
+  bundler now picks them per layout.
 - `"resolution": "auto"` in `app.json` builds an app at 1920×1080 and 3840×2160, and the title picks
   the layout matching the console's video output at launch (4K and 1440p get 3840×2160). The output
   mode comes from `sceVideoOutGetCurrentOutputMode_` on the main AvSetting bus. Generated bundles and

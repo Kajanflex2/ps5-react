@@ -198,7 +198,8 @@ sharp text on 4K TVs; 1920×1080 costs a quarter of the rasterization and
 uploads changed rows through the faster buffer-texture path, which matters for
 apps that redraw large areas every frame.
 
-`"resolution": "auto"` replaces `render` and `surface`. The build compiles the
+`"resolution": "auto"` replaces `render` and `surface`, and is what the starter
+uses. The build compiles the
 app twice, at 1920×1080 and 3840×2160, and the title picks the layout matching
 the console's video output when it starts: 4K and 1440p output get 3840×2160,
 everything else 1920×1080. Classes and baked font sizes are per layout, so the
@@ -287,7 +288,7 @@ export default {
 ```
 
 Lengths use logical pixels at a default base width of 1280. The compiler scales
-lengths to the app's render width: `p-4` becomes 32 physical pixels at 2560.
+lengths to the app's render width: `p-4` becomes 48 physical pixels at 3840.
 Later classes win; explicit `style` wins over classes.
 
 | Supported approach | Avoid |
