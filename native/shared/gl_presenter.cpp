@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "gl_presenter.hpp"
+#include "video_api.hpp"
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -172,6 +173,7 @@ bool GlPresenter::init(int width, int height) {
   GLint max_texels = 0;
   glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &max_texels);
   max_texels_ = stage_program_ ? max_texels : 0;
+  video_.init(true);
   return true;
 }
 
@@ -211,6 +213,8 @@ bool GlPresenter::unchanged(std::span<const ERRect> damage, std::span<const Dama
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     const ERLayer& a = layers_[i];
     const ERLayer& b = drawn_layers_[i].layer;
+    // A playing video changes without the engine knowing.
+    if (video_layers::Layer playing; video_layers::find(a.image, playing)) return false;
     if (drawn_layers_[i].image != (a.image ? a.image : "") || a.pixels != b.pixels || a.src_x != b.src_x ||
         a.src_y != b.src_y || a.src_w != b.src_w || a.src_h != b.src_h || a.alpha != b.alpha ||
         a.radius_tl != b.radius_tl || a.radius_tr != b.radius_tr || a.radius_br != b.radius_br ||
@@ -364,20 +368,64 @@ void GlPresenter::free_layer_images(std::size_t keep) {
   });
 }
 
-// The screen as one draw per four layers, the framebuffer in the last; `x, y, w, h` is the viewport
-// that shows the framebuffer.
+// The screen: layers bottom first, then the framebuffer over them, all premultiplied; `x, y, w, h` is
+// the viewport that shows the framebuffer. Image layers composite four to a draw; a <Video> layer is
+// drawn by the player's renderer between the groups of image layers below and above it.
 void GlPresenter::composite(int x, int y, int w, int h) {
   std::vector<Drawn>& drawn = drawn_now_;
   drawn.clear();
-  for (const ERLayer& layer : layers_)
-    if (layer.clip.w > 0 && layer.clip.h > 0 && layer.dst.w > 0 && layer.dst.h > 0 && layer.alpha != 0 &&
-        layer_image(layer))
-      drawn.push_back({&layer, nullptr});
+  for (const ERLayer& layer : layers_) {
+    if (layer.clip.w <= 0 || layer.clip.h <= 0 || layer.dst.w <= 0 || layer.dst.h <= 0 || layer.alpha == 0) continue;
+    if (video_layers::Layer playing; video_layers::find(layer.image, playing)) {
+      if (playing.frame) drawn.push_back({&layer, nullptr, true});
+    } else if (layer_image(layer)) {
+      drawn.push_back({&layer, nullptr, false});
+    }
+  }
   // Creating an image can move the others, so the pointers are taken once all exist.
-  for (Drawn& d : drawn) d.image = layer_image(*d.layer);
+  for (Drawn& d : drawn)
+    if (!d.video) d.image = layer_image(*d.layer);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glViewport(x, y, w, h);
+  bool covered = false;
+  std::size_t begin = 0;
+  for (std::size_t i = 0; i < drawn.size(); ++i) {
+    if (!drawn[i].video) continue;
+    composite_group(begin, i, !covered, false, x, y, w, h);
+    covered = covered || i > begin;
+    video_layers::Layer playing;
+    video_layers::find(drawn[i].layer->image, playing);
+    const ERLayer& l = *drawn[i].layer;
+    if (!covered) {
+      glDisable(GL_SCISSOR_TEST);
+      glClearColor(0, 0, 0, 1);
+      glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    const GlVideo::Target target{l.dst.x, l.dst.y, l.dst.x + l.dst.w, l.dst.y + l.dst.h, l.clip.x, l.clip.y,
+                                 l.clip.x + l.clip.w, l.clip.y + l.clip.h, l.alpha / 255.0f};
+    video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_, playing.upscale);
+    glDisable(GL_SCISSOR_TEST);
+    covered = true;
+    begin = i + 1;
+  }
+  composite_group(begin, drawn.size(), !covered, true, x, y, w, h);
+  glDisable(GL_BLEND);
+  glActiveTexture(GL_TEXTURE0);
+  free_layer_images(kKeptLayerImages);
+}
+
+// Image layers drawn[begin, end), four to a draw, the framebuffer over the last with `with_frame`. With
+// `opaque` the first draw replaces what is there (over black); later ones, and all without it, blend.
+void GlPresenter::composite_group(std::size_t begin, std::size_t end, bool opaque, bool with_frame, int x, int y,
+                                  int w, int h) {
+  const std::vector<Drawn>& drawn = drawn_now_;
+  const int passes = std::max<int>(with_frame ? 1 : 0, (int(end - begin) + kPassLayers - 1) / kPassLayers);
+  if (!passes) return;
   glDisable(GL_SCISSOR_TEST);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glViewport(x, y, w, h);
   glBindVertexArray(vao_);
   glUseProgram(composite_program_);
   const auto at = [&](const char* name) { return glGetUniformLocation(composite_program_, name); };
@@ -386,12 +434,11 @@ void GlPresenter::composite(int x, int y, int w, int h) {
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, frame_);
   glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-  const int passes = std::max<int>(1, (int(drawn.size()) + kPassLayers - 1) / kPassLayers);
   for (int pass = 0; pass < passes; ++pass) {
     float clip[4 * kPassLayers] = {}, dst[4 * kPassLayers] = {}, src[4 * kPassLayers] = {};
     float size[2 * kPassLayers] = {}, alpha[kPassLayers] = {}, radii[4 * kPassLayers] = {};
     int count = 0;
-    for (std::size_t i = std::size_t(pass) * kPassLayers; i < drawn.size() && count < kPassLayers; ++i, ++count) {
+    for (std::size_t i = begin + std::size_t(pass) * kPassLayers; i < end && count < kPassLayers; ++i, ++count) {
       const ERLayer& l = *drawn[i].layer;
       const float c[] = {float(l.clip.x), float(l.clip.y), float(l.clip.x + l.clip.w), float(l.clip.y + l.clip.h)};
       const float d[] = {float(l.dst.x), float(l.dst.y), float(l.dst.x + l.dst.w), float(l.dst.y + l.dst.h)};
@@ -416,14 +463,11 @@ void GlPresenter::composite(int x, int y, int w, int h) {
       glUniform1fv(at("alpha"), count, alpha);
       glUniform4fv(at("radii"), count, radii);
     }
-    glUniform1i(at("with_frame"), pass == passes - 1);
-    glUniform1i(at("opaque"), pass == 0);
-    if (pass == 0) glDisable(GL_BLEND); else glEnable(GL_BLEND);
+    glUniform1i(at("with_frame"), with_frame && pass == passes - 1);
+    glUniform1i(at("opaque"), opaque && pass == 0);
+    if (opaque && pass == 0) glDisable(GL_BLEND); else glEnable(GL_BLEND);
     glDrawArrays(GL_TRIANGLES, 0, 3);
   }
-  glDisable(GL_BLEND);
-  glActiveTexture(GL_TEXTURE0);
-  free_layer_images(kKeptLayerImages);
 }
 
 bool GlPresenter::present(int sw, int sh) {
@@ -431,6 +475,10 @@ bool GlPresenter::present(int sw, int sh) {
   for (std::size_t i = 0; i < layers_.size(); ++i)
     drawn_layers_[i] = {layers_[i].image ? layers_[i].image : "", layers_[i]};
   surface_width_ = sw; surface_height_ = sh;
+  struct VideoDone {
+    GlVideo& video;
+    ~VideoDone() { video.end_present(); }
+  } video_done{video_};
   ++presents_;
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_FRAMEBUFFER_SRGB);
@@ -450,6 +498,7 @@ bool GlPresenter::present(int sw, int sh) {
 }
 
 void GlPresenter::release() {
+  video_.release();
   for (const LayerImage& image : layer_images_) glDeleteTextures(1, &image.texture);
   layer_images_.clear();
   for (const Staging& s : staging_) {

@@ -3,6 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
 #include "baked_sounds.h"
+#include "video_audio.hpp"
 #include "audio/mixer.hpp"
 #include <cstdint>
 #include <cstring>
@@ -71,8 +72,25 @@ JSValue set_volume(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 }
 } // namespace
 
+namespace video_audio {
+constexpr std::size_t kSlot = 0;
+
+bool start() {
+  if (!audio) audio = host::start_audio(mixer);
+  return audio;
+}
+
+void route(hui::audio::StreamRing* ring) {
+  if (audio) mixer.swap_stream(kSlot, ring);
+}
+
+void set_gain(float gain) {
+  if (audio) mixer.set_stream_gain(kSlot, gain, 0.0f);
+}
+} // namespace video_audio
+
 bool ps5_react_start_sound() {
-  // Apps without sounds open no audio device and start no audio thread.
+  // Apps without sounds open no audio device and start no audio thread, until a video plays.
   if (!ps5_react_sound_count) return false;
   sounds.reserve(ps5_react_sound_count);
   for (std::uint32_t i = 0; i < ps5_react_sound_count; ++i) {

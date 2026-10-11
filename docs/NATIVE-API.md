@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v9) is
+each host installs before the bundle runs. Its exact shape (ABI v10) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -298,6 +298,14 @@ which restarts the inactivity timer as input does (the method FTP and download
 homebrew use). The desktop preview disables or enables the SDL screen saver and
 prints `[power] keep awake on|off`. **Not yet validated on hardware**: no test
 has shown a console staying awake through its rest-mode timeout.
+
+## Video (ABI v10)
+
+`<Video>` ([VIDEO.md](VIDEO.md)) is built on `video.open(source, options)`, which returns the
+player's id and the name of the placeholder image its `<Image layer>` draws, `video.close(id)`,
+setters for pause, seek, volume, mute, loop, resize mode, audio delay, audio and subtitle track,
+`video.addSubtitle(id, source, language, title)` for a subtitle file, and `video.poll()`, every open
+player's status, read each frame while one is open. Apps use the component.
 
 ## Fonts
 

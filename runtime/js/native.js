@@ -524,3 +524,47 @@ export function acquireImage(uri, width, height, fit, prefetch, listener) {
   }
   return release;
 }
+
+const players = new Map();
+let stopVideoPolling = null;
+
+function pollVideos() {
+  for (const status of host().video.poll()) players.get(status.id)?.(status);
+}
+
+/**
+ * Internal: one native player behind a `<Video>`. `listener` receives the player's status every frame
+ * while it is open. Returns the engine image name its `<Image layer>` draws and the controls.
+ * @param {string} source an app path or http(s) URL
+ * @param {{paused?: boolean, muted?: boolean, loop?: boolean, volume?: number, start?: number,
+ *   audio?: boolean, headers?: Record<string, string>}} options
+ * @param {(status: object) => void} listener
+ */
+export function openVideo(source, options, listener) {
+  const video = host().video;
+  const {id, name} = video.open(source, options);
+  players.set(id, listener);
+  stopVideoPolling ??= onFrameUnbatched(pollVideos);
+  return {
+    name,
+    setPaused: paused => video.setPaused(id, !!paused),
+    seek: seconds => video.seek(id, seconds),
+    setVolume: volume => video.setVolume(id, volume),
+    setMuted: muted => video.setMuted(id, !!muted),
+    setLoop: loop => video.setLoop(id, !!loop),
+    setAudioDelay: seconds => video.setAudioDelay(id, seconds),
+    setResizeMode: mode => video.setResizeMode(id, mode),
+    setUpscale: model => video.setUpscale(id, model),
+    selectAudioTrack: index => video.selectAudioTrack(id, index),
+    selectSubtitleTrack: index => video.selectSubtitleTrack(id, index),
+    addSubtitle: ({uri, language = '', title = ''}) => video.addSubtitle(id, uri, language, title),
+    close() {
+      if (!players.delete(id)) return;
+      video.close(id);
+      if (players.size === 0) {
+        stopVideoPolling?.();
+        stopVideoPolling = null;
+      }
+    },
+  };
+}

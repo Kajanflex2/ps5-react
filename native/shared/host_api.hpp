@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v9) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v10) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -81,6 +81,24 @@
 //   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
 //                                  0..1, pan -1..1); false without audio or while it still plays
 //   sound.setVolume(volume)        master gain 0..1 for every sound
+//   video.open(source, options)   ABI v10; {id, name}: plays an app path or http(s) URL on its own
+//                                  threads; options: paused, muted, loop, volume, start, audio, headers.
+//                                  `name` is the placeholder image an <Image layer> draws, which the
+//                                  presenter replaces with the video
+//   video.close(id)               stops it and frees it off the render thread
+//   video.setPaused(id, paused) / seek(id, seconds) / setVolume(id, 0..1) / setMuted(id, muted) /
+//   setLoop(id, loop) / setResizeMode(id, 0 contain | 1 cover | 2 stretch) / selectAudioTrack(id, index) /
+//   selectSubtitleTrack(id, index) / setAudioDelay(id, seconds, -2..2: the sound later than the picture) /
+//   setUpscale(id, model: '' for none, 'artcnn', 'anime4k-s' / -m / -l / -vl / -ul; where compute shaders run)
+//   video.addSubtitle(id, source, language, title) the track index of a text subtitle file (path or URL),
+//                                  loaded off the render thread
+//   video.poll()                   [{id, state, paused, seeking, position, duration, buffered, width,
+//                                  height, aspect, error, videoCodec, audioCodec, decoder, audioTrack,
+//                                  audioTracks: [{index, language, title, codec, channels}],
+//                                  subtitleTracks: [{index, language, title, codec, external}],
+//                                  subtitleTrack, subtitle (the text showing now),
+//                                  shownFrames, droppedFrames, lateMs, audioClock}]; state 'loading' | 'ready' |
+//                                  'buffering' | 'ended' | 'failed'
 //   text.setLanguage(tag)          ABI v6; BCP 47 language for runtime text (Han glyph forms,
 //                                  shaping); defaults to the system language
 //   exit(relaunch)                 asks the host to close after this frame; with relaunch true it
@@ -205,3 +223,5 @@ JSValue ps5_react_package_api(JSContext* ctx);
 JSValue ps5_react_browser_capture_api(JSContext* ctx);
 // ABI v9: UDP broadcast queries on the local network (lan.hpp).
 JSValue ps5_react_lan_api(JSContext* ctx);
+// ABI v10: video playback (video_api.hpp).
+JSValue ps5_react_video_api(JSContext* ctx);

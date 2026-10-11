@@ -47,6 +47,13 @@ has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK
 pair, and FSELF path used by the hardware-tested proof of concept.
 
+Video decoding is the other work off the render thread: each `<Video>` player
+demuxes and decodes video and audio on three threads of its own, and the render
+thread only picks the decoded picture due and draws it as a layer
+([VIDEO.md](VIDEO.md)). Apps with `"video": true` reserve 448 MiB of flexible
+memory outside the heap for the PS5's hardware decoders, so their heap is
+smaller than the 96 MiB rule below gives.
+
 Only a commit's repaint leaves the render thread. `native/shared/render_workers.cpp`
 starts a thread per available CPU, up to `ERUI_RENDER_WORKERS` (8), and the
 engine splits each commit's repaint once into horizontal bands, one per worker

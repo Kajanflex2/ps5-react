@@ -18,6 +18,7 @@ import zipfile
 from rar_worker import build as build_rar_worker, unrar_source
 from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image
 from network_ports import ports, copy_notices
+import ffmpeg
 from text_fonts import harfbuzz, sheenbidi
 
 BUILD = ROOT / ".build/starter/ps5"
@@ -137,7 +138,7 @@ def main():
                ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_writer.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/browser_capture_api.cpp", ROOT / "native/shared/lan.cpp", ROOT / "native/shared/lan_api.cpp", ROOT / "native/ps5/browser_capture.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
-               ROOT / "native/shared/gl_presenter.cpp",
+               ROOT / "native/shared/gl_presenter.cpp", ROOT / "native/shared/gl_video.cpp", ROOT / "native/shared/gl_upscale.cpp", ROOT / "native/shared/video_api.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/js_profiler.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/render_workers.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
                hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
@@ -158,11 +159,31 @@ def main():
     if network_ports:
         sources.extend(access_client / "examples/pacbrew-curl" / name for name in ("netdb.c",))
         includes.append(network_ports / "include")
+    # Video: the player and the pinned FFmpeg, only in apps that ask for them.
+    video_libs, video_stubs = [], []
+    if config.get("video"):
+        video_prefix = ffmpeg.ps5(sdk, archive_ports, env)
+        sources.extend([ROOT / "native/shared/video_player.cpp", ROOT / "native/shared/video_subtitles.cpp",
+                        ROOT / "native/ps5/video_decoder.cpp"])
+        includes.append(video_prefix / "include")
+        video_libs = [video_prefix / "lib" / name for name in ffmpeg.LIBRARIES] + [archive_ports / "lib/libssl.a"]
+        # The SDK has no import stub for the hardware decoder: one empty function per call we make, under the
+        # module's name. Only these: an import the firmware lacks would keep the whole eboot from loading.
+        stub_source = BUILD / "libSceVideodec2.c"
+        stub_source.write_text("".join(f"void sceVideodec2{name}(void) {{}}\n" for name in (
+            "QueryComputeMemoryInfo", "AllocateComputeQueue", "ReleaseComputeQueue", "QueryDecoderMemoryInfo",
+            "CreateDecoder", "DeleteDecoder", "Reset", "Decode", "Flush")))
+        video_stubs = [BUILD / "libSceVideodec2.so"]
+        run([sdk / "bin/prospero-clang", "-shared", "-nostdlib", "-nodefaultlibs", "-fPIC",
+             "-Wl,-soname,libSceVideodec2.sprx", "-o", video_stubs[0], stub_source], env=env, log=BUILD / "videodec2-stub.log")
     objects = []
     for i, source in enumerate(sources):
         obj = BUILD / "obj" / f"{i}-{source.name}.o"
         cpp = source.suffix in (".cpp", ".cc")
         flags = ["-std=c++20", "-fno-exceptions", "-fno-rtti"] if cpp else ["-std=c11"]
+        # A video app keeps 448 MiB of flexible memory outside its heap for the hardware decoders' workspaces.
+        if source.name == "app_heap.c" and config.get("video"):
+            flags = flags + ["-DHUI_HEAP_RESERVE=(448u * 1024u * 1024u)"]
         warnings = (["-w", "-DHB_TINY", "-DHB_HAS_RASTER"] if source in harfbuzz_sources else
                     ["-w", "-DSB_CONFIG_UNITY"] if source.name == "SheenBidi.c" else ["-Wall", "-Wextra", "-Werror"])
         run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", *warnings,
@@ -186,11 +207,12 @@ def main():
          "--start-group", cross / "liber-software.a", cross / "bridge/liber-bridge-quickjs.a",
          cross / "bridge/engine/libembedded-react.a", cross / "_deps/quickjs-build/libqjs.a",
          gl / "lib/libPS5OpenGL.a", libs / "libunwind.a", libs / "libc++abi.a", libs / "libc++.a",
-         *network_libs, *archive_libs, builtins, "--end-group", "--as-needed", *agc_stubs, *sorted(libs.glob("*.so"))],
+         *video_libs, *network_libs, *archive_libs, builtins, "--end-group", *video_stubs, "--as-needed", *agc_stubs,
+         *sorted(libs.glob("*.so"))],
         env=env, log=BUILD / "link.log")
     elf = BUILD / "eboot.elf"
     run([host_tool, "link", "--in", pie, "--out", elf, "--stub-dir", libs,
-         *[flag for path in agc_stubs for flag in ("--stub", path)], "--module-sdk", "0x02000009",
+         *[flag for path in [*agc_stubs, *video_stubs] for flag in ("--stub", path)], "--module-sdk", "0x02000009",
          "--companion-sdk", "0x08050001", "--file-name", "eboot.elf"])
     # The PKG installer runs as a loader payload: an app may not use the console's install service.
     installer = BUILD / "pkg-installer.elf"
@@ -226,6 +248,9 @@ def main():
     param = json.loads((hui / "sce_sys/param.json").read_text())
     if config.get("refreshRate", 60) == 120:
         param["attribute3"] = param.get("attribute3", 0) | 0x80040  # The console grants 120 Hz output only with these bits.
+    if config.get("video"):
+        # The most the console gives (from the default 448 MiB); the rest comes out of direct memory.
+        param.setdefault("kernel", {})["flexibleMemorySize"] = 1 << 30
     param.update(titleId=TITLE, conceptId=TITLE[4:], contentId=config["contentId"], contentVersion=config["version"])
     param["localizedParameters"]["en-US"]["titleName"] = config["name"]
     (app / "sce_sys/param.json").write_text(json.dumps(param, indent=2) + "\n")
@@ -285,12 +310,21 @@ def main():
         "SheenBidi-LICENSE": sb / "LICENSE",
         "Inter-LICENSE": hui / "assets/fonts/Inter-LICENSE.txt",
         "material-sounds-NOTICE.txt": ROOT / "licenses/material-sounds-NOTICE.txt",
+        "ArtCNN-LICENSE": ROOT / "licenses/ArtCNN-LICENSE",
+        "Anime4K-LICENSE": ROOT / "licenses/Anime4K-LICENSE",
         "ps5-opengl-LICENSE": gl.parent / "LICENSE",
         "ps5-opengl-NOTICES.md": gl.parent / "THIRD_PARTY_NOTICES.md",
     }.items():
         shutil.copy2(source, notices / name)
     if (gl.parent / "LICENSES").exists():
         shutil.copytree(gl.parent / "LICENSES", notices / "ps5-opengl", dirs_exist_ok=True)
+    for name in ("ffmpeg-LICENSE.md", "ffmpeg-COPYING.LGPLv3", "video-decoder-NOTICE.txt"):
+        (notices / name).unlink(missing_ok=True)
+    if config.get("video"):
+        # FFmpeg as configured is LGPL-3.0-or-later (tools/ffmpeg.py).
+        shutil.copy2(ffmpeg.source() / "LICENSE.md", notices / "ffmpeg-LICENSE.md")
+        shutil.copy2(ffmpeg.source() / "COPYING.LGPLv3", notices / "ffmpeg-COPYING.LGPLv3")
+        shutil.copy2(ROOT / "licenses/video-decoder-NOTICE.txt", notices / "video-decoder-NOTICE.txt")
     shutil.copy2(ROOT / "docs/DEPENDENCIES.md", notices / "SOURCES.md")
     run([host_tool, "self", "--inspect", "--file", app / "eboot.bin"])
     run([host_tool, "self", "--inspect", "--file", app / "sce_module/libc.prx"])

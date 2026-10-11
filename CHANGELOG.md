@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — video upscalers
+
+- `<Video upscale>` doubles a picture shown bigger than its source with a network for animation
+  before it is scaled to its box: `'artcnn'` (ArtCNN C4F16, the luma) or `'anime4k-s'`, `-m`, `-l`,
+  `-vl`, `-ul` (Anime4K Upscale CNN x2). Their mpv user shaders are embedded unchanged and run as
+  GL compute passes, split over two display frames; needs compute shaders (the PS5).
+- 10-bit pictures from the PS5 decoder are read as low-aligned samples: HEVC Main 10
+  showed green.
+
 ## Unreleased — less CPU per frame
 
 - The presenter keeps the framebuffer in a GPU texture: moved rects are blitted there, damaged
@@ -239,6 +248,20 @@
 - Reuse native task polling and integrity hashing for HTTP and archive workers.
 - Link pinned PacBrew archive/compression ports into native PS5 titles; add
   `tools/build_ps5.py --compile-only` for package-free linker validation.
+
+## Unreleased — video
+
+- Add `<Video>` (native ABI v10, docs/VIDEO.md): files and http(s) streams, demuxed by FFmpeg 7.1.5
+  (LGPL-3.0-or-later, pinned and built static for both hosts by `tools/ffmpeg.py`), decoded on the
+  PS5 by `libSceVideodec2` for H.264, HEVC Main/Main 10 and VP9 up to 3840×2160 and by FFmpeg for
+  the rest up to 1080p. The picture is a layer the presenter draws (YUV to RGB, HDR tone-mapped to
+  SDR); the audio plays through the sound mixer and is the clock; seeking, pause, volume, looping
+  and audio track selection; an audio delay for TVs that show the picture late; text subtitles from
+  the file or from separate files, given to the app as text to draw (`onSubtitle`). A stream that
+  breaks off is opened again where it stopped once the network is back. Apps opt in with `"video": true`, which also raises the PS5 title's
+  flexible memory to 1 GiB and keeps 448 MiB of it outside the heap for the decoders.
+- `apps/video-lab`: plays the files in its `media/` folder and URLs, with the player's measurements
+  on screen and an unattended playlist mode for console runs.
 
 ## Unreleased
 

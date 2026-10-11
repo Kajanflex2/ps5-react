@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "screenshot.hpp"
+#include "video_api.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -50,7 +51,7 @@ std::uint32_t presented(const std::uint32_t* pixels, int width, int x, int y, co
     if (x < l.dst.x || y < l.dst.y || x >= l.dst.x + l.dst.w || y >= l.dst.y + l.dst.h) continue;
     if (in_corner(l, x, y)) continue;
     unsigned texel[3];
-    sample(l, x, y, texel);
+    if (!video_layers::sample(l.image, l.dst.x, l.dst.y, l.dst.w, l.dst.h, x, y, texel)) sample(l, x, y, texel);
     for (int c = 0; c < 3; ++c) rgb[c] = (texel[c] * l.alpha + rgb[c] * (255u - l.alpha) + 127u) / 255u;
   }
   const unsigned inverse = 255u - (ui >> 24);

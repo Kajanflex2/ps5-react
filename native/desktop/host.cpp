@@ -38,6 +38,7 @@ void er_register_assets(void);
 #include "render_workers.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
+#include "video_api.hpp"
 #include "storage_stats.hpp"
 #include "directory_records.hpp"
 #include <algorithm>
@@ -135,6 +136,8 @@ struct Host {
   Uint32 previous_tick = 0, next_repeat = 0, next_image_stats = 0;
   // When the last frame callback ran: the next one advances by the whole frame period, swap wait included.
   std::int64_t previous_step_us = 0;
+  // The monitor's frame interval, for picking video frames by display frame.
+  std::int64_t display_frame_us = 16667;
   std::string image_stats;
   const char* held_action = nullptr;
   InputScript script;
@@ -156,6 +159,7 @@ struct Host {
     lan::stop();
   packages::stop();
   network::stop();
+    video_layers::stop();
     if (runtime_started) er_runtime_shutdown();
     text_shaper::shutdown();
     ps5_react_stop_sound();
@@ -182,6 +186,8 @@ struct Host {
       SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window || !(context = SDL_GL_CreateContext(window))) return false;
     SDL_GL_SetSwapInterval(1);
+    if (SDL_DisplayMode mode; SDL_GetWindowDisplayMode(window, &mode) == 0 && mode.refresh_rate > 0)
+      display_frame_us = 1000000 / mode.refresh_rate;
     std::printf("GL %s / %s\n", glGetString(GL_VERSION), glGetString(GL_RENDERER));
     for (int i = 0; i < SDL_NumJoysticks(); ++i)
       if (SDL_IsGameController(i) && (controller = SDL_GameControllerOpen(i))) break;
@@ -430,6 +436,7 @@ struct Host {
       int layer_count = 0;
       const ERLayer* layers = er_get_layers(&layer_count);
       presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
+      video_layers::update(now_us(), display_frame_us);
       if (!presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), sw, sh)) return false;
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       {
