@@ -267,6 +267,64 @@ listed it, from the reply's sender address, and a confirm on that entry signed i
 one reply; cancellation, `maxReplies`, several concurrent queries and a network without a
 responder were not checked on the console.
 
+## Video playback — 2026-10-11
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus. `apps/video-lab` built as a test
+identity (`PPSA99063`, a registered test title; executable SHA-256 `c1d0e563ba6deb0d1d99e0f2b9d41ed343ade598a4d978518ef37c877a702fdd`) from the
+`video-playback` branch, with `dev/playlist.txt` and the files of `media/` copied to the title
+folder. The TV was off, so nothing was seen or heard: the evidence is the host's log.
+
+- **Decoders.** At launch, before filesystem elevation, `libSceVideodec2` loaded and the H.264,
+  HEVC (Main 10) and VP9 decoders came up sized for 3840×2176, each with its own compute queue;
+  flexible memory went from 531 to 369 MiB of 1024.
+- **4K.** Big Buck Bunny 3840×2160 60 fps H.264 High (Blender's release), from the title folder
+  and over http from a Mac on the LAN: 60 pictures shown per second with the audio (MP3) as the
+  clock, 0 dropped in 20 s including a seek to 5:00 (over http, 0 in 25 s with a seek to 2:00).
+  Earlier builds that took every picture already due dropped about 4 a second; picking within half
+  a display frame fixed it. A 3840×2160 HEVC Main 10 clip tagged PQ: 24 fps, 0 dropped.
+- **Six minutes.** The same 4K 60 fps file for 360 s with four pictures queued ahead: 29 dropped,
+  24 of the player's display frames with no picture ready. Timing each `sceVideodec2Decode` call
+  showed 0.2 ms for most and 50–57 ms for the 1 MB keyframes, every one of which matched a
+  starvation. With eight queued and sixteen frame buffers (executable SHA-256
+  `988c8cb242485ea3eaa8b489ea7802cd29b172c0741806bd6dc611837933ce88`): no starvation in 360 s, 21
+  dropped, which is what a 60.00 fps file loses on a 59.94 Hz output (one every 16.7 s); heap
+  71–88 of 384 MiB throughout, 0.8–1.2 cores; 9301 MiB of direct memory free after the frame
+  buffers.
+- **VP9.** A 3840×2160 60 fps clip of 600 pictures first showed 607 with 7 dropped: the decoder
+  hands back a hidden (alt-ref) frame from the call that decodes it. Leaving those out: 600 shown,
+  0 dropped. The same build: the HDR10 clip with a seek, 0 dropped; a 3840×2160 60 fps HEVC
+  Main 10 open-GOP encode (x265, a CRA every 2 s with RASL pictures) with seeks to 5.5, 9.1 and
+  13.3 s, 0 dropped and no decode errors.
+- **Other files.** 1920×1080 H.264 (hardware), a 1280×720 H.264 4:4:4 MKV with AC-3 5.1 and AAC
+  tracks and a 320×240 MPEG-4 Part 2 AVI with MP3 (FFmpeg): 0 dropped.
+- **Upload.** About 1.5 ms per 4K frame through a storage buffer.
+- **CPU.** The process's `getrusage` time over each two seconds: 1.0–1.2 cores busy for the 4K 60 fps
+  H.264 file, 0.8 for the 4K HEVC one, 0.18 for the 320×240 MPEG-4 one (FFmpeg).
+  `sceKernelGetProcessTime` (`DeviceInfo.processTime`) and `CLOCK_PROCESS_CPUTIME_ID` advance with
+  the wall clock on the console, so they cannot measure this.
+- **Stability.** 21 opens and closes in a row across the five files: every hardware decode reused
+  its decoder, the heap stayed at 50–55 of 384 MiB, nothing failed.
+- **Elevation.** With the decoders created at launch, filesystem elevation failed every time
+  (`status=7`): the helper's log, sent over UDP with a temporary `/data/homebrew/dev.conf`, showed
+  `target_preflight error=16` with 58 threads, and it takes only a one-thread process. Created after
+  elevation, decoders failed at `QueryDecoderMemoryInfo` (0x811D0200) and compute queues at
+  0x811D0111. Preparing everything but the decoders before elevation and creating them on first
+  use: elevation `status=0`, and H.264, HEVC and VP9 decoders created afterwards played as above.
+- **A Jellyfin client.** A development build of a private app (not in this repository) with
+  `"video": true`, signed in to a Jellyfin-compatible server on the LAN: Play resumed a 2002×1080
+  H.264 film at the server's saved position and played it through the hardware decoder at 24 fps,
+  0 dropped in 20 s, pictures within about 1 ms of the audio clock, with native networking up.
+- **Network loss.** The 4K 60 fps file over http, with the Mac's server stopped 15 s into
+  playback. For 40 s: the 30 s read ahead played, then 16 s of buffering, and FFmpeg's own
+  reconnect carried on. For 150 s, earlier: FFmpeg stopped reconnecting, the end of the read-ahead
+  counted as the end of the file, and the audio clock stopped with seven pictures queued: the
+  player stood still, reporting `ready`, and did not recover. With the stream opened again where
+  it broke off and the clock handed over (executable SHA-256
+  `58428b9dbf3acb3082067b1b54831fcc58699f1766ae5364f97063a47dc1d549`): `buffering` at 62.9 s, playing again at 63.9 s once the
+  server was back, nothing skipped or repeated.
+- **Not checked.** Picture and sound on a TV, A/V sync by eye or ear, playback longer than six
+  minutes, a real Jellyfin server.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

@@ -29,6 +29,8 @@
 #include "payload_loader.hpp"
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
+#include "video_api.hpp"
+#include "video_frame.hpp"
 #include "filesystem_access.hpp"
 #include <EGL/egl.h>
 #include <ps5_opengl_display_modes.h>
@@ -43,6 +45,7 @@
 #include <string>
 #include <utility>
 #include <pthread.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 
 extern "C" {
@@ -285,6 +288,14 @@ bool run_proof() {
       std::fclose(file);
     }
     er_set_layers_enabled(ok && layers && presenter.layers_supported());
+    // A test deploy may upload video as textures instead of storage buffers with dev/video-upload.txt "textures".
+    if (FILE* file = std::fopen(dev_path("video-upload.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && !std::strncmp(text, "textures", 8)) presenter.set_video_upload(false);
+      std::fclose(file);
+    }
+    async_log::write("[PS5-REACT] video upload=%s",
+                     presenter.video().upload_mode() == GlVideo::Upload::storage ? "storage" : "textures");
     async_log::write("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
   }
   if (ok) {
@@ -377,6 +388,29 @@ bool run_proof() {
         async_log::write("[PS5-REACT] %s", line);
         // Every fifth summary, about ten seconds apart.
         if (++summaries % 5 == 1) log_memory();
+        if (const std::string videos = video_layers::summary(); !videos.empty()) {
+          const std::uint64_t bytes = presenter.video().take_upload_bytes();
+          const std::uint32_t us = presenter.video().take_upload_us();
+          // The whole process's CPU time since the last line, as cores busy: decoding threads included.
+          static std::int64_t cpu_before = 0, wall_before = 0;
+          rusage usage{};
+          getrusage(RUSAGE_SELF, &usage);
+          const std::int64_t cpu_us = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * std::int64_t{1000000} +
+                                      usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+          const std::int64_t wall_us = hui::sys::monotonic_us();
+          const double cores = wall_before && wall_us > wall_before ? double(cpu_us - cpu_before) / (wall_us - wall_before) : 0;
+          cpu_before = cpu_us;
+          wall_before = wall_us;
+          async_log::write("[PS5-REACT] video upload %.1f MiB in %.1f ms, process cpu %.2f cores", bytes / 1048576.0,
+                           us / 1000.0, cores);
+          std::size_t start = 0;
+          while (start < videos.size()) {
+            const std::size_t end = videos.find('\n', start);
+            async_log::write("[PS5-REACT] %s", videos.substr(start, end - start).c_str());
+            if (end == std::string::npos) break;
+            start = end + 1;
+          }
+        }
       }
       // Input and JavaScript commit layout only; the commit after them paints the frame once.
       er_set_raster_deferred(true);
@@ -424,6 +458,7 @@ bool run_proof() {
       int layer_count = 0;
       const ERLayer* layers = er_get_layers(&layer_count);
       presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
+      video_layers::update(hui::sys::monotonic_us(), 1000000 / refresh_hz);
       ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
                           display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
@@ -469,6 +504,7 @@ bool run_proof() {
     }
   }
   if (!ok && runtime) async_log::write("[PS5-REACT] error=%s", er_runtime_last_error());
+  video_layers::stop();
   ps5_react_stop_images();
   archives::stop();
   browser_capture::stop();
@@ -509,6 +545,9 @@ int main() {
   else
     hui::sys::log("[PS5-REACT] heap: none, system malloc (flexible memory free %zu MiB)", flexible_before >> 20);
   launch_us = hui::sys::monotonic_us();
+#if PS5_REACT_VIDEO
+  video::preload_platform_decoder();
+#endif
   initialize_filesystem_access();
   pthread_attr_t attributes;
   int result = pthread_attr_init(&attributes);

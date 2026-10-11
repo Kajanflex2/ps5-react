@@ -219,6 +219,20 @@
 - Link pinned PacBrew archive/compression ports into native PS5 titles; add
   `tools/build_ps5.py --compile-only` for package-free linker validation.
 
+## Unreleased — video
+
+- Add `<Video>` (native ABI v10, docs/VIDEO.md): files and http(s) streams, demuxed by FFmpeg 7.1.5
+  (LGPL-3.0-or-later, pinned and built static for both hosts by `tools/ffmpeg.py`), decoded on the
+  PS5 by `libSceVideodec2` for H.264, HEVC Main/Main 10 and VP9 up to 3840×2160 and by FFmpeg for
+  the rest up to 1080p. The picture is a layer the presenter draws (YUV to RGB, HDR tone-mapped to
+  SDR); the audio plays through the sound mixer and is the clock; seeking, pause, volume, looping
+  and audio track selection; an audio delay for TVs that show the picture late; text subtitles from
+  the file or from separate files, given to the app as text to draw (`onSubtitle`). A stream that
+  breaks off is opened again where it stopped once the network is back. Apps opt in with `"video": true`, which also raises the PS5 title's
+  flexible memory to 1 GiB and keeps 448 MiB of it outside the heap for the decoders.
+- `apps/video-lab`: plays the files in its `media/` folder and URLs, with the player's measurements
+  on screen and an unattended playlist mode for console runs.
+
 ## Unreleased
 
 - Add `LocalNetwork.broadcast({port, message})` (native ABI v9): a UDP broadcast on the local

@@ -21,6 +21,8 @@ No proprietary Sony modules are redistributed.
 | Noto fonts | Noto Sans SC and JP 2.004, Devanagari 2.007, Bengali 3.011 and Arabic 2.013 (SIL OFL 1.1), pinned by commit and SHA-256 (`notoFonts`). Packaged only for the scripts an app lists in `textFonts`, subset by `tools/text_fonts.py`; builds then copy `licenses/Noto-fonts-LICENSE.txt` to `notices/`. |
 | Material Design sound resources | The starter's interface sounds, (c) Google, CC BY 4.0: six files from the pack's `wav` set, mixed to mono, trimmed, faded and normalized by `tools/ui_sounds.mjs`. Attribution and changes: `licenses/material-sounds-NOTICE.txt`; builds copy it to `notices/material-sounds-NOTICE.txt`. Keep it with any app that ships these sounds. |
 | UnRAR | RarLab unrarsrc 7.2.1, SHA-256-pinned (`unrarSource`), patched by `patches/unrar-worker.patch`. UnRAR license (free to use for extracting RAR archives; not GPL-compatible). Linked only into `rar-extract` (`native/rar_worker`, MIT), a separate program the engine starts for RAR sets (the payload loader on the console, a child process on the desktop); never linked into the engine. Builds copy its license to `notices/unRAR-license.txt`. |
+| FFmpeg | 7.1.5, SHA-256-pinned release archive (`ffmpeg` in the lock file), built static by `tools/ffmpeg.py` with the same components for both hosts: libavformat, libavcodec, libavutil, libswresample and libswscale, configured `--enable-version3` without GPL parts, so LGPL-3.0-or-later. Linked only into apps with `"video": true`; the PS5 build uses the pinned OpenSSL for https. Builds copy `LICENSE.md` and `COPYING.LGPLv3` to `notices/`. The build's corresponding source is the pinned archive plus that configure line. |
+| PS5 video decoder interface | `native/ps5/video_decoder.cpp` is new GPL-3.0-or-later code against the `libSceVideodec2` interface as ProsperoLight and EVO Player (both GPL-3.0) established it; no Sony code or headers. The import stub is generated from function names at build time. Builds copy `licenses/video-decoder-NOTICE.txt` to `notices/`. |
 | Inter / LLVM / payload SDK | Inter: SIL OFL. LLVM: Apache-2.0 with exceptions. The public SDK contains separately licensed components. |
 
 Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
@@ -35,7 +37,10 @@ Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [Noto fonts](https://github.com/notofonts/notofonts.github.io),
 [Material Design sound resources](https://m2.material.io/design/sound/sound-resources.html)
 (mirrored at [archive.org](https://archive.org/details/material-design-sound-resources)),
-[Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17).
+[Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17),
+[FFmpeg 7.1.5](https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz),
+[ProsperoLight](https://github.com/blackbearreloaded/ProsperoLight),
+[EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5).
 
 Exact revisions, archive hashes, and compiler-rt package identity are recorded
 in `dependencies.lock.json`; each local build also creates a receipt.

@@ -12,7 +12,7 @@ index 786cba1..a3527af 100644
  
  #include <errno.h>
  #include <stdatomic.h>
-@@ -28,12 +29,22 @@ void sceLibcMspaceFree(void *mspace, void *address);
+@@ -28,12 +29,25 @@ void sceLibcMspaceFree(void *mspace, void *address);
  int sceLibcMspacePosixMemalign(void *mspace, void **address, size_t alignment, size_t size);
  size_t sceLibcMspaceMallocUsableSize(const void *address);
  
@@ -26,7 +26,10 @@ index 786cba1..a3527af 100644
 +static const size_t hui_heap_sizes[] = {1024 * HUI_MIB, 768 * HUI_MIB, 512 * HUI_MIB,
 +                                        384 * HUI_MIB,  256 * HUI_MIB, 192 * HUI_MIB,
 +                                        128 * HUI_MIB};
++/* An app that sets memory up outside the heap (a hardware video decoder) leaves itself more. */
++#ifndef HUI_HEAP_RESERVE
 +#define HUI_HEAP_RESERVE (96 * HUI_MIB)
++#endif
 +
 +/* Process-lifetime heap: do not unmap underneath late C++ destructors. */
  static atomic_int hui_heap_state;

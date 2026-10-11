@@ -200,6 +200,9 @@ otherwise the console stays at 60 Hz. Each frame then has 8.3 ms, so frames
 that fit 60 Hz can miss at 120, and switching the TV into the mode delays the
 first frame by about 1.5 s. Motion keeps its speed at either rate.
 
+`"video": true` links FFmpeg and the PS5's hardware decoder for `<Video>`: H.264,
+HEVC and VP9 up to 4K, more formats up to 1080p ([docs/VIDEO.md](docs/VIDEO.md)).
+
 Configuration errors are reported before expensive builds. Add networking and filesystem opt-ins only
 when your app needs those capabilities.
 

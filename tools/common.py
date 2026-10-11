@@ -170,6 +170,8 @@ def app_config(app, config=None):
         raise ValueError("filesystemAccess must be sandbox or console")
     if type(config.get("networking", False)) is not bool:
         raise ValueError("networking must be a boolean")
+    if type(config.get("video", False)) is not bool:
+        raise ValueError("video must be a boolean")
     if config.get("networking") and config.get("filesystemAccess", "sandbox") != "console":
         raise ValueError('networking requires filesystemAccess: "console" for the PS5 native transport')
     resource_files(app, config)
@@ -190,7 +192,8 @@ def generated_config(config, directory):
                    "TIMEOUT": config["timeoutSeconds"], "REFRESH_RATE": config.get("refreshRate", 60),
                    "NAME": config["name"], "TITLE": config["titleId"],
                    "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console"),
-                   "NETWORKING": int(config.get("networking", False))}
+                   "NETWORKING": int(config.get("networking", False)),
+                   "VIDEO": int(config.get("video", False))}
     (directory / "app_config.hpp").write_text("#pragma once\n" + "".join(
         f"#define PS5_REACT_{key} {json.dumps(value)}\n" for key, value in definitions.items()))
 

@@ -124,6 +124,11 @@
         ]
       },
       "description": "Scripts whose subset Noto font is packaged in fonts/ and shaped and rasterized at runtime when text needs it: chinese (GB 2312), japanese (JIS X 0208), devanagari (Hindi), bengali, arabic (Arabic and Urdu). See docs/TEXT.md."
+    },
+    "video": {
+      "type": "boolean",
+      "default": false,
+      "description": "Plays video with <Video> (FFmpeg demuxing and decoding). Adds about 16 MB to the PS5 build; streams over http(s) also need networking."
     }
   },
   "additionalProperties": false,

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "damage_tracker.hpp"
+#include "gl_video.hpp"
 #include "er_scene.h"
 #include <cstdint>
 #include <span>
@@ -29,6 +30,9 @@ public:
             int surface_width, int surface_height);
   // Whether set_layers() can draw: hosts enable engine layers only then (er_set_layers_enabled).
   bool layers_supported() const { return layer_program_ != 0 && max_texels_ > 0; }
+  // Video layers (video_api.hpp) upload through storage buffers when GL has them, else textures.
+  void set_video_upload(bool storage) { video_.init(storage); }
+  GlVideo& video() { return video_; }
   // The layers the next present draws beneath the framebuffer, bottom first; valid until that present.
   void set_layers(std::span<const ERLayer> layers) { layers_ = layers; }
   void release();
@@ -67,6 +71,7 @@ private:
   std::vector<LayerImage> layer_images_;
   std::uint64_t presents_ = 0;
   std::span<const ERLayer> layers_;
+  GlVideo video_;
   Timing timing_;
 
   bool one_to_one(int surface_width, int surface_height) const;
@@ -80,4 +85,5 @@ private:
   const LayerImage* layer_image(const ERLayer& layer);
   void free_layer_images(std::size_t keep);
   void draw_layers(int x, int y, int w, int h);
+  void use_layer_program();
 };

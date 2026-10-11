@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "gl_presenter.hpp"
+#include "video_api.hpp"
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -164,6 +165,7 @@ bool GlPresenter::init(int width, int height) {
   }
   // Without a buffer texture every size presents through the 2D texture.
   if (glGetError() != GL_NO_ERROR) release_buffer();
+  video_.init(true);
   return true;
 }
 
@@ -341,13 +343,19 @@ void GlPresenter::free_layer_images(std::size_t keep) {
 
 // Draws the layers into the viewport (x, y, w, h), which shows the whole framebuffer, then leaves
 // premultiplied blending on for the framebuffer drawn over them. Textures no layer used are freed.
+void GlPresenter::use_layer_program() {
+  glBindVertexArray(vao_);
+  glActiveTexture(GL_TEXTURE0);
+  glUseProgram(layer_program_);
+  glUniform1i(glGetUniformLocation(layer_program_, "pixels"), 0);
+  glUniform2f(glGetUniformLocation(layer_program_, "size"), float(width_), float(height_));
+}
+
 void GlPresenter::draw_layers(int x, int y, int w, int h) {
   glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
   glEnable(GL_BLEND);
   glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-  glUseProgram(layer_program_);
-  glUniform1i(glGetUniformLocation(layer_program_, "pixels"), 0);
-  glUniform2f(glGetUniformLocation(layer_program_, "size"), float(width_), float(height_));
+  use_layer_program();
   const GLint dst = glGetUniformLocation(layer_program_, "dst"), src = glGetUniformLocation(layer_program_, "src"),
               alpha = glGetUniformLocation(layer_program_, "alpha"), size = glGetUniformLocation(layer_program_, "image"),
               first = glGetUniformLocation(layer_program_, "first"), rows = glGetUniformLocation(layer_program_, "rows");
@@ -355,6 +363,17 @@ void GlPresenter::draw_layers(int x, int y, int w, int h) {
   glEnable(GL_SCISSOR_TEST);
   for (const ERLayer& layer : layers_) {
     if (layer.clip.w <= 0 || layer.clip.h <= 0 || layer.alpha == 0 || !layer.pixels) continue;
+    // A <Video> element's placeholder: the player's frame is drawn in its place.
+    if (video_layers::Layer playing; video_layers::find(layer.image, playing)) {
+      if (playing.frame) {
+        const GlVideo::Target target{layer.dst.x, layer.dst.y, layer.dst.x + layer.dst.w, layer.dst.y + layer.dst.h,
+                                     layer.clip.x, layer.clip.y, layer.clip.x + layer.clip.w,
+                                     layer.clip.y + layer.clip.h, layer.alpha / 255.0f};
+        video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_);
+        use_layer_program();
+      }
+      continue;
+    }
     // GL counts scissor rows from the bottom of the window.
     const int x0 = x + int(layer.clip.x * sx + 0.5f), x1 = x + int((layer.clip.x + layer.clip.w) * sx + 0.5f);
     const int y0 = y + h - int((layer.clip.y + layer.clip.h) * sy + 0.5f), y1 = y + h - int(layer.clip.y * sy + 0.5f);
@@ -380,6 +399,10 @@ void GlPresenter::draw_layers(int x, int y, int w, int h) {
 }
 
 bool GlPresenter::present(int sw, int sh) {
+  struct VideoDone {
+    GlVideo& video;
+    ~VideoDone() { video.end_present(); }
+  } video_done{video_};
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_SCISSOR_TEST);
   glDisable(GL_FRAMEBUFFER_SRGB);
@@ -431,6 +454,7 @@ void GlPresenter::release_buffer() {
 }
 
 void GlPresenter::release() {
+  video_.release();
   release_buffer();
   for (const LayerImage& image : layer_images_) {
     glDeleteTextures(int(image.textures.size()), image.textures.data());
