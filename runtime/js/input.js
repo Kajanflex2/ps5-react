@@ -2,14 +2,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 const listeners = new Set();
+const touchListeners = new Set();
 
+// Actions as strings, touch samples as [x, y] (x null when the finger lifts), in arrival order.
 const pending = [];
 
 function deliver() {
-  for (const action of pending.splice(0)) for (const listener of listeners) listener(action);
+  for (const item of pending.splice(0)) {
+    if (typeof item === 'string') for (const listener of listeners) listener(item);
+    else for (const listener of touchListeners) listener(item[0], item[1]);
+  }
 }
 
-// Input protocol v4 (versioned apart from the native API's ABI in host_api.hpp): hosts emit
+// Input protocol v5 (versioned apart from the native API's ABI in host_api.hpp): hosts emit
 // up/down/left/right/confirm/back/l1/r1/l2/r2/triangle/square (v2: the first six; v3: up to square),
 // and options for apps with "optionsButton": "app"
 // on the JS/render thread, before the frame's pump. Actions are delivered from the pump's microtask
@@ -18,6 +23,12 @@ function deliver() {
 // count that render outside `react`.
 globalThis.__ps5ReactDispatch = action => {
   if (pending.push(action) === 1) Promise.resolve().then(deliver);
+};
+
+// Input protocol v5: the touchpad's first finger, each frame it moves, at (x, y) 0..1 across the pad,
+// and (null) once when it lifts. The focus runtime turns its travel into moves (focus/touch.js).
+globalThis.__ps5ReactTouch = (x, y) => {
+  if (pending.push([x ?? null, y ?? null]) === 1) Promise.resolve().then(deliver);
 };
 
 /**
@@ -34,4 +45,13 @@ globalThis.__ps5ReactDispatch = action => {
 export function subscribeInput(listener) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
+}
+
+/**
+ * Internal: receive the touchpad's finger until the returned function is called.
+ * @param {(x: number | null, y: number | null) => void} listener
+ */
+export function subscribeTouch(listener) {
+  touchListeners.add(listener);
+  return () => { touchListeners.delete(listener); };
 }

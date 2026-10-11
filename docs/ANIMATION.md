@@ -450,10 +450,13 @@ make animations run in slow motion.
 The preview replays a scripted input sequence when `PS5_REACT_INPUT_SCRIPT` is
 set, through the same dispatch path as the keyboard and controller. Steps are
 separated by commas or whitespace: an action (`up`, `down`, `left`, `right`, `confirm`, `back`,
-`l1`, `r1`, `l2`, `r2`, `triangle`, `square`) takes one frame, `action*N` repeats it at the held-key repeat interval
+`l1`, `r1`, `l2`, `r2`, `triangle`, `square`, `options`) takes one frame, `action*N` repeats it at the held-key repeat interval
 (110 ms), `wait:MS` pauses for wall-clock milliseconds, `quit` closes the
-preview, and `shot:NAME` saves the frame on screen (letters, digits, `_`
-and `-`; see [Screenshots](#screenshots)). `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
+preview, `shot:NAME` saves the frame on screen (letters, digits, `_`
+and `-`; see [Screenshots](#screenshots)), and `swipe:DIRECTION:TRAVEL` slides a
+touchpad finger `TRAVEL` (up to 0.5 of the pad) from its middle over 16 frames and lifts it
+([NAVIGATION.md](NAVIGATION.md#touchpad)). `ps5_drive.py script "<steps>"` runs steps in a
+running preview. `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
 action is echoed as a `script:` line, so the log reads as a timeline. Run the
 preview binary directly, with the bundle of the layout it was built for, to set them:
 

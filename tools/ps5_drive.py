@@ -16,6 +16,8 @@
   ps5_drive.py diff                     what changed on screen since the last snapshot or diff
   ps5_drive.py focus <key|@ref>         move focus by focusKey or by a ref from the last snapshot
   ps5_drive.py shot <path.bmp>          the frame on screen, 960×540
+  ps5_drive.py script "<steps>"         input-script steps from now on (docs/ANIMATION.md), e.g.
+                                        "swipe:right:0.3" for a touchpad swipe
   ps5_drive.py logs                     output printed since the last call
   ps5_drive.py wait <ms>                return after that many milliseconds of frames
   ps5_drive.py stop

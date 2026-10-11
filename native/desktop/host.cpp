@@ -252,14 +252,14 @@ struct Host {
     return action;
   }
 
-  bool dispatch(const char* action) {
+  // Calls the runtime's input entry `name` with `argc` arguments, which it frees.
+  bool call_input(const char* name, int argc, JSValue* argv) {
     gc_scheduler.input(now_us());
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     JSContext* ctx = er_runtime_context();
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue fn = JS_GetPropertyStr(ctx, global, "__ps5ReactDispatch");
-    JSValue arg = JS_NewString(ctx, action);
-    JSValue result = JS_Call(ctx, fn, global, 1, &arg);
+    JSValue fn = JS_GetPropertyStr(ctx, global, name);
+    JSValue result = JS_Call(ctx, fn, global, argc, argv);
     const bool ok = !JS_IsException(result);
     if (!ok) {
       JSValue error = JS_GetException(ctx);
@@ -268,10 +268,23 @@ struct Host {
       if (message) JS_FreeCString(ctx, message);
       JS_FreeValue(ctx, error);
     }
-    JS_FreeValue(ctx, result); JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, result);
+    for (int i = 0; i < argc; ++i) JS_FreeValue(ctx, argv[i]);
     JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
     er_perf_phase_end(ER_PERF_PHASE_JS);
     return ok;
+  }
+
+  bool dispatch(const char* action) {
+    JSValue arg = JS_NewString(er_runtime_context(), action);
+    return call_input("__ps5ReactDispatch", 1, &arg);
+  }
+
+  // A controller touchpad's first finger at (x, y) 0..1, or lifted.
+  bool touch(bool down, float x, float y) {
+    JSContext* ctx = er_runtime_context();
+    JSValue args[2] = {down ? JS_NewFloat64(ctx, x) : JS_NULL, down ? JS_NewFloat64(ctx, y) : JS_NULL};
+    return call_input("__ps5ReactTouch", 2, args);
   }
 
   // A development hook's result as text: strings as they are, anything else through JSON.
@@ -326,6 +339,10 @@ struct Host {
         Control::reply(client, call_js("__ps5ReactInspect", nullptr));
       } else if (verb == "focus") {
         Control::reply(client, call_js("__ps5ReactFocus", arg.c_str()) == "true" ? "ok" : "not found: " + arg);
+      } else if (verb == "script") {
+        // Runs input-script steps from now on, e.g. a touchpad swipe.
+        char error[512] = {};
+        Control::reply(client, script.parse(arg.c_str(), error, sizeof error) ? "ok" : std::string("error: ") + error);
       } else if (verb == "logs") {
         Control::reply(client, control.take_logs());
       } else if (verb == "wait") {
@@ -352,6 +369,9 @@ struct Host {
       const std::string name = std::string("/temp0/") + (action + 5) + ".bmp";
       const bool saved = host::resolve_path(name.c_str(), path, sizeof path) && save_screenshot(path);
       std::printf("[PS5-REACT] shot %s: %s\n", path, saved ? "saved" : std::strerror(errno));
+    } else if (!std::strncmp(action, "touch:", 6)) {
+      float x = 0, y = 0;
+      return touch(std::sscanf(action + 6, "%f,%f", &x, &y) == 2, x, y);
     } else return dispatch(action);
     return true;
   }
@@ -386,6 +406,9 @@ struct Host {
             action = repeats(mapped) ? hold(action_name(mapped), SDL_SCANCODE_UNKNOWN, button) : action_name(mapped);
         }
         if (PS5_REACT_OPTIONS_TO_APP && button == SDL_CONTROLLER_BUTTON_START) action = action_name(HostAction::options);
+      } else if ((event.type == SDL_CONTROLLERTOUCHPADDOWN || event.type == SDL_CONTROLLERTOUCHPADMOTION ||
+                  event.type == SDL_CONTROLLERTOUCHPADUP) && event.ctouchpad.touchpad == 0 && event.ctouchpad.finger == 0) {
+        if (!touch(event.type != SDL_CONTROLLERTOUCHPADUP, event.ctouchpad.x, event.ctouchpad.y)) return false;
       } else if (event.type == SDL_CONTROLLERAXISMOTION) {
         // Triggers are analog: an action on crossing half travel, re-armed below a quarter.
         const auto trigger = [&](bool& down, const char* name) {

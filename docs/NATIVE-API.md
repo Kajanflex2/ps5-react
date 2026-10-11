@@ -238,7 +238,7 @@ receives the raw `up`, `down`, `left`, `right`, `confirm`, `back`, `l1`, `r1`,
 `l2`, `r2`, `triangle`, and `square` actions (plus `previous`/`next` for
 compatibility); `useGamepad` is for raw analog and
 button state. Options exits through the host, unless `app.json` has `"optionsButton": "app"`: then
-it arrives as the `options` action ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v4)).
+it arrives as the `options` action ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v5)).
 
 ## Sound
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — rows and the touchpad
+
+- `FocusScope row`: Left and Right stop at a row's ends instead of stepping into the rows around it
+  (a `blocked` move), and a row entered for the first time starts at its `selected` element or its
+  first, later at the one it had.
+- The touchpad navigates (input protocol v5): hosts report the DualSense's first finger to
+  `__ps5ReactTouch`, and the focus runtime steps focus once per stretch of a swipe, locked to the
+  axis it started on. Its moves carry `source: 'touchpad'` in navigation events. The PS5 reads the
+  touch data beside the pad's sample queue with `scePadReadState`; not yet validated on hardware.
+- `useFocus().focusedRect()`: the focused element's rectangle on screen, to place a menu beside it.
+- Input scripts and `ps5_drive.py script` take `swipe:DIRECTION:TRAVEL`.
+
 ## Unreleased — Options for apps
 
 - `"optionsButton": "app"` in `app.json` hands Options (Escape and a controller's Start on the

@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <sys/mount.h>
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -46,6 +47,9 @@ struct NotifyRequest {
 };
 
 extern "C" {
+int scePadGetHandle(int user, int type, int index);
+int scePadReadState(int handle, void* data);
+int sceUserServiceGetInitialUser(int* user);
 int sceKernelSendNotificationRequest(int device, NotifyRequest* request, std::size_t size, int blocking);
 int sceKernelGetSystemSwVersion(SystemSwVersion* version);
 int sceKernelGetCpuTemperature(int* temperature);
@@ -361,6 +365,58 @@ bool start_audio(hui::audio::Mixer& mixer) { return audio_out.start(mixer); }
 
 void stop_audio() { audio_out.stop(); }
 } // namespace host
+
+namespace {
+// ScePadData (120 bytes): buttons, sticks, triggers, motion, then the touch data at 0x34, as on the
+// PS4 and in the platform's RawPadSample, whose `connected` sits at 0x4c right after it.
+struct PadState {
+  std::uint8_t before_touch[0x34];
+  std::uint8_t touches;
+  std::uint8_t reserved0[3];
+  std::uint32_t reserved1;
+  struct { std::uint16_t x, y; std::uint8_t id, reserved[3]; } touch[2];
+  std::uint8_t after_touch[120 - 0x4c];
+};
+static_assert(sizeof(PadState) == 120);
+static_assert(offsetof(PadState, touch) == 0x3c);
+
+// The DualSense reports 0..1919 across and 0..1079 down.
+constexpr float kTouchWidth = 1919.0f, kTouchHeight = 1079.0f;
+int touch_handle = -2; // -2 until looked up
+bool touching = false;
+std::uint16_t touch_from[2] = {}, touch_to[2] = {};
+} // namespace
+
+bool host_platform_read_touch(float* x, float* y) {
+  if (!active_pad || !active_pad->is_open()) return false;
+  if (touch_handle == -2) {
+    int user = -1;
+    sceUserServiceGetInitialUser(&user);
+    // The handle Pad::open made: one standard pad per user.
+    touch_handle = scePadGetHandle(user, 0, 0);
+    async_log::write("[PS5-REACT] touchpad handle=%d", touch_handle);
+  }
+  PadState state{};
+  if (touch_handle < 0 || scePadReadState(touch_handle, &state) < 0) return false;
+  const bool down = state.touches > 0;
+  const auto& finger = state.touch[0];
+  // Where each touch starts and ends, to check the layout and the pad's range on a new console.
+  if (down && !touching) {
+    touch_from[0] = finger.x;
+    touch_from[1] = finger.y;
+  } else if (!down && touching) {
+    async_log::write("[PS5-REACT] touch from %u,%u to %u,%u", touch_from[0], touch_from[1], touch_to[0], touch_to[1]);
+  }
+  if (down) {
+    touch_to[0] = finger.x;
+    touch_to[1] = finger.y;
+  }
+  touching = down;
+  if (!down) return false;
+  *x = finger.x / kTouchWidth;
+  *y = finger.y / kTouchHeight;
+  return true;
+}
 
 void host_platform_tick(std::int64_t now_us) {
   if (!keeping_awake || now_us < next_power_tick_us) return;

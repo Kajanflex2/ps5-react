@@ -17,7 +17,7 @@ import {findClosest, findNearest, findWrap} from './geometry.js';
  * @typedef {{focusKey?: string, onPress?: () => void, onFocus?: () => void, onBlur?: () => void,
  *   autoFocus?: boolean, disabled?: boolean, nextFocusUp?: string, nextFocusDown?: string,
  *   nextFocusLeft?: string, nextFocusRight?: string}} NodeProps
- * @typedef {{focusKey?: string, autoFocus?: boolean, trap?: boolean, wrap?: boolean,
+ * @typedef {{focusKey?: string, autoFocus?: boolean, trap?: boolean, wrap?: boolean, row?: boolean,
  *   restoreFocus?: boolean, inert?: boolean, onBack?: () => boolean | void,
  *   onAction?: (action: Action) => boolean | void}} ScopeProps
  *   `inert` takes the scope's subtree out of navigation (a hidden layer that stays mounted).
@@ -198,6 +198,8 @@ export class FocusManager {
         return true;
       }
       if (scope.props.trap) return false;
+      // A row ends at its ends: Left and Right never land in the rows around it.
+      if (scope.props.row && (direction === 'left' || direction === 'right')) return false;
     }
     return false;
   }
@@ -251,6 +253,18 @@ export class FocusManager {
     return result;
   }
 
+  /** A row's remembered element, else its `selected` one, else its first. @param {Scope} scope @returns {Node | null} */
+  rowEntry(scope) {
+    const remembered = scope.remembered;
+    if (remembered && !remembered.dead && navigable(remembered.scope) && scope.props.restoreFocus !== false) {
+      return remembered;
+    }
+    for (const node of this.nodes) {
+      if (node.props.selected && within(node.scope, scope) && navigable(node.scope)) return node;
+    }
+    return this.firstOf(scope);
+  }
+
   /** @param {Scope} scope @returns {Node | null} */
   firstOf(scope) {
     const remembered = scope.remembered;
@@ -264,10 +278,15 @@ export class FocusManager {
     return first;
   }
 
-  /** The node to focus when a move lands on `winner`: entering a scope restores its remembered element. */
+  /**
+   * The node to focus when a move lands on `winner`: entering a scope restores its remembered element;
+   * a row entered for the first time starts at its `selected` element, or else its first, wherever the
+   * move came from.
+   */
   entryPoint(winner, current) {
     let entered = null;
     for (let scope = winner.scope; scope && !within(current.scope, scope); scope = scope.parent) entered = scope;
+    if (entered?.props.row) return this.rowEntry(entered) ?? winner;
     const remembered = entered?.remembered;
     return remembered && !remembered.dead && navigable(remembered.scope) && entered.props.restoreFocus !== false
       ? remembered : winner;

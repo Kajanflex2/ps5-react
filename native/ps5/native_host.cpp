@@ -243,14 +243,14 @@ const char* nav_action(hui::Direction direction) {
 GcScheduler gc_scheduler(hui::sys::monotonic_us);
 JsProfiler profiler(hui::sys::monotonic_us);
 
-bool dispatch(const char* action) {
+// Calls the runtime's input entry `name` with `argc` arguments, which it frees.
+bool call_input(const char* name, int argc, JSValue* argv) {
   gc_scheduler.input(hui::sys::monotonic_us());
   er_perf_phase_begin(ER_PERF_PHASE_JS);
   JSContext* ctx = er_runtime_context();
   JSValue global = JS_GetGlobalObject(ctx);
-  JSValue fn = JS_GetPropertyStr(ctx, global, "__ps5ReactDispatch");
-  JSValue value = JS_NewString(ctx, action);
-  JSValue result = JS_Call(ctx, fn, global, 1, &value);
+  JSValue fn = JS_GetPropertyStr(ctx, global, name);
+  JSValue result = JS_Call(ctx, fn, global, argc, argv);
   const bool ok = !JS_IsException(result);
   if (!ok) {
     JSValue error = JS_GetException(ctx);
@@ -259,10 +259,23 @@ bool dispatch(const char* action) {
     if (message) JS_FreeCString(ctx, message);
     JS_FreeValue(ctx, error);
   }
-  JS_FreeValue(ctx, result); JS_FreeValue(ctx, value);
+  JS_FreeValue(ctx, result);
+  for (int i = 0; i < argc; ++i) JS_FreeValue(ctx, argv[i]);
   JS_FreeValue(ctx, fn); JS_FreeValue(ctx, global);
   er_perf_phase_end(ER_PERF_PHASE_JS);
   return ok;
+}
+
+bool dispatch(const char* action) {
+  JSValue value = JS_NewString(er_runtime_context(), action);
+  return call_input("__ps5ReactDispatch", 1, &value);
+}
+
+// The touchpad's finger at (x, y) 0..1, or lifted.
+bool touch(bool down, float x, float y) {
+  JSContext* ctx = er_runtime_context();
+  JSValue args[2] = {down ? JS_NewFloat64(ctx, x) : JS_NULL, down ? JS_NewFloat64(ctx, y) : JS_NULL};
+  return call_input("__ps5ReactTouch", 2, args);
 }
 
 // Display.setRefreshRate: the rate can change only while EGL is terminated (ps5_opengl_display_modes.h),
@@ -393,6 +406,7 @@ bool run_proof() {
     std::uint64_t frames = 0;
     InputScript script;
     load_input_script(script);
+    bool touched = false;
     LiveCommands commands;
     commands.start();
     // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
@@ -464,6 +478,11 @@ bool run_proof() {
       for (const auto& [button, action] : kExtraActions) {
         if (ok && input.is_pressed(button)) ok = dispatch(action_name(action));
       }
+      // Each frame the finger is down, and once when it lifts.
+      float touch_x = 0, touch_y = 0;
+      const bool touch_down = host_platform_read_touch(&touch_x, &touch_y);
+      if (ok && (touch_down || touched)) ok = touch(touch_down, touch_x, touch_y);
+      touched = touch_down;
       commands.poll(now, script);
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
         async_log::write("[PS5-REACT] script: %s", action);
@@ -471,6 +490,9 @@ bool run_proof() {
         if (!std::strncmp(action, "shot:", 5)) {
           const std::string path = dev_path((std::string(action + 5) + ".bmp").c_str());
           async_log::write("[PS5-REACT] shot %s: %s", path.c_str(), save_screenshot(path.c_str()) ? "saved" : std::strerror(errno));
+        } else if (!std::strncmp(action, "touch:", 6)) {
+          float x = 0, y = 0;
+          ok = touch(std::sscanf(action + 6, "%f,%f", &x, &y) == 2, x, y);
         } else {
           ok = dispatch(action);
         }

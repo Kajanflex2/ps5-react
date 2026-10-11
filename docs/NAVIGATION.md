@@ -60,7 +60,7 @@ AppRegistry.registerComponent('menu', () => Menu);
 `npm run create` scaffolds this menu; `apps/starter`, `apps/tailwind-gallery`,
 `apps/system-explorer`, and `apps/motion-lab` use the patterns below.
 
-## Host input (input protocol v4)
+## Host input (input protocol v5)
 
 The input protocol is versioned on its own; it is not the native API's ABI
 version ([NATIVE-API.md](NATIVE-API.md#contract)).
@@ -76,6 +76,11 @@ Options (Escape on desktop) closes the app, unless `app.json` sets
 `"optionsButton": "app"`. Then, since input protocol v4, it arrives as the `options`
 action like the buttons above, and the PS button is how the user leaves. A media app
 uses it for its settings, as the system apps do.
+
+Since input protocol v5, hosts also report the touchpad's first finger: `__ps5ReactTouch(x, y)`
+with its position 0..1 across and down the pad each frame it touches, and `__ps5ReactTouch(null)`
+once when it lifts (the PS5 reads the DualSense; the desktop, a controller's touchpad through SDL).
+See [Touchpad](#touchpad).
 
 The focus manager does not move on these buttons: they go to the enclosing
 `FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle, settings on Options)
@@ -96,6 +101,23 @@ frames.
 | `l2`, `r2` | Z, C | L2, R2 (past half travel on the desktop) |
 | `triangle`, `square` | T, F | Triangle, Square |
 | `options` with `"optionsButton": "app"`, otherwise exit (handled by the host) | Escape, controller Start | Options |
+
+## Touchpad
+
+A finger sliding on the touchpad moves focus as the D-pad would, one step per stretch of travel:
+about a ninth of the pad's width across, a fifth of its height down. A slow swipe walks card by card
+and a long one runs further; going back over the ground steps back, like a dial. A swipe settles on
+an axis after a short distance and keeps to it, and a tap moves nothing. Each step reaches
+`useNavigationEvents` as a `move` or `blocked` event with `source: 'touchpad'`, so an app can tick
+for swipes alone:
+
+```js
+useNavigationEvents(event => {
+  if (event.type === 'move' && event.source === 'touchpad') Controller.vibrate(0.25, 25);
+});
+```
+
+Pressing the touchpad stays the `touchpad` button of `useGamepad`.
 
 ## Focusable elements
 
@@ -154,6 +176,7 @@ express the order you want, and use `nextFocus*` only for exceptions.
 | `autoFocus` | Focus the scope's first (or remembered) element on mount |
 | `trap` | Focus cannot leave the scope (modals, dialogs) |
 | `wrap` | Moving past the last element in a direction wraps to the first in that row/column; with nothing in that row/column (Down from a tab row), focus leaves the scope as usual unless it traps |
+| `row` | A horizontal row (a shelf of cards): Left and Right stop at its ends instead of moving into the rows around it (the move reports `blocked`). Entered for the first time it focuses its `selected` element, or else its first; after that, the one it had, as `restoreFocus` does |
 | `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
 | `onBack` | Handles Circle while focus is inside; return `true` to consume |
 | `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, `square`, and `options` (with `"optionsButton": "app"`) while focus is inside, innermost scope first; return `true` to consume |
@@ -200,8 +223,8 @@ It never re-renders its component, so call it once near the root.
 
 | Event | When |
 | --- | --- |
-| `{type: 'move', direction}` | Focus moved (spatially, through `nextFocus*`, or onto the first element when nothing had focus) |
-| `{type: 'blocked', direction}` | Nothing to move to: an edge, a trap, or no focusable element |
+| `{type: 'move', direction, source?}` | Focus moved (spatially, through `nextFocus*`, or onto the first element when nothing had focus); `source` is `'touchpad'` for a step of a swipe |
+| `{type: 'blocked', direction, source?}` | Nothing to move to: an edge, a trap, a row's end, or no focusable element |
 | `{type: 'press', handled}` | Cross on the focused element; `handled` when it is enabled and has `onPress` (no event without focus) |
 | `{type: 'back', handled}` | Circle; `handled` when an `onBack` or `BackHandler` listener consumed it |
 | `{type: 'action', action, handled}` | L1, R1, L2, R2, Triangle, Square or Options; `handled` when an `onAction` returned `true` |

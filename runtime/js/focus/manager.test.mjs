@@ -309,6 +309,42 @@ test('focusedRect is the focused element on screen, past the scrolling around it
   assert.deepEqual(t.focus.focusedRect(), {x: 60, y: 200, width: 200, height: 120});
 });
 
+test('a row keeps Left and Right inside, starts at its first element, and comes back where it was', () => {
+  const t = setup();
+  const top = t.scope(t.focus.root, {row: true});
+  const below = t.scope(t.focus.root, {row: true});
+  for (let i = 0; i < 4; i++) t.node(`a${i}`, i * 120, 0, top);
+  // The row below sits further right, so a plain scope would let Right step down into it.
+  for (let i = 0; i < 4; i++) t.node(`b${i}`, 240 + i * 120, 120, below);
+  t.focus.mountScope(top);
+  t.focus.mountScope(below);
+  t.focus.focus(t.focus.firstOf(top));
+  for (let i = 0; i < 3; i++) t.focus.move('right');
+  assert.equal(t.key(), 'a3');
+  assert.equal(t.focus.move('right'), false);
+  assert.equal(t.key(), 'a3');
+  t.focus.move('down');
+  assert.equal(t.key(), 'b0', 'entered for the first time: its first element, not the nearest');
+  t.focus.move('right');
+  t.focus.move('up');
+  assert.equal(t.key(), 'a3', 'back where the row was left');
+  t.focus.move('down');
+  assert.equal(t.key(), 'b1');
+});
+
+test('a row entered for the first time starts at its selected element', () => {
+  const t = setup();
+  const top = t.scope(t.focus.root);
+  t.node('above', 0, 0, top);
+  const pills = t.scope(t.focus.root, {row: true});
+  for (let i = 0; i < 4; i++) t.node(`p${i}`, i * 120, 120, pills, i === 2 ? {selected: true} : {});
+  t.focus.mountScope(top);
+  t.focus.mountScope(pills);
+  t.focus.focus(t.focus.firstOf(top));
+  t.focus.move('down');
+  assert.equal(t.key(), 'p2');
+});
+
 test('an inert scope is out of navigation; a move with nothing visible stays put', () => {
   const t = setup();
   const browse = t.scope(t.focus.root, {inert: true});

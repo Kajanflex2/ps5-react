@@ -12,6 +12,7 @@
 
 namespace {
 constexpr std::uint32_t kRepeatMs = 110; // The desktop host's held-key repeat interval.
+constexpr int kSwipeFrames = 16;         // A swipe's finger samples, one per frame.
 } // namespace
 
 bool InputScript::parse(const char* text, char* error, std::size_t size) {
@@ -44,6 +45,26 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
       steps_.push_back({token, 0});
       continue;
     }
+    if (token.rfind("swipe:", 0) == 0) {
+      // swipe:DIRECTION:TRAVEL: a finger sliding TRAVEL (0..1 of the pad) from its middle, then lifting.
+      const std::size_t colon = token.find(':', 6);
+      const std::string direction = token.substr(6, colon == std::string::npos ? std::string::npos : colon - 6);
+      const double travel = colon == std::string::npos ? -1 : std::strtod(token.c_str() + colon + 1, &rest);
+      const double dx = direction == "right" ? 1 : direction == "left" ? -1 : 0;
+      const double dy = direction == "down" ? 1 : direction == "up" ? -1 : 0;
+      if ((!dx && !dy) || travel <= 0 || travel > 0.5 || *rest) {
+        std::snprintf(error, size, "bad swipe '%s' (swipe:left|right|up|down:TRAVEL, TRAVEL 0..0.5 of the pad)", token.c_str());
+        return false;
+      }
+      for (int frame = 0; frame <= kSwipeFrames; ++frame) {
+        const double at = travel * frame / kSwipeFrames;
+        char sample[48];
+        std::snprintf(sample, sizeof sample, "touch:%.4f,%.4f", 0.5 + dx * at, 0.5 + dy * at);
+        steps_.push_back({sample, 0});
+      }
+      steps_.push_back({"touch:up", 0});
+      continue;
+    }
     long count = 1;
     if (const std::size_t star = token.find('*'); star != std::string::npos) {
       count = std::strtol(token.c_str() + star + 1, &rest, 10);
@@ -59,7 +80,7 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
     if (!action) {
       std::string known;
       for (const char* name : kActionNames) known += std::string(name) + ", ";
-      std::snprintf(error, size, "unknown action '%s' (use %squit, wait:MS, shot:NAME)", token.c_str(), known.c_str());
+      std::snprintf(error, size, "unknown action '%s' (use %squit, wait:MS, shot:NAME, swipe:DIRECTION:TRAVEL)", token.c_str(), known.c_str());
       return false;
     }
     for (long i = 0; i < count; ++i) {

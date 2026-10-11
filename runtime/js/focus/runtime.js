@@ -3,10 +3,11 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // The app's focus manager, its React contexts, and the host input that drives it.
 import {createContext} from 'react';
-import {subscribeInput} from '../input.js';
+import {subscribeInput, subscribeTouch} from '../input.js';
 import {dispatchBackPress} from '../native.js';
 import {installInspector} from './inspect.js';
 import {FocusManager} from './manager.js';
+import {TouchNavigator} from './touch.js';
 
 export const manager = new FocusManager();
 installInspector(manager);
@@ -21,10 +22,11 @@ export const NodeContext = createContext(null);
 export const AnchorContext = createContext(null);
 
 /**
- * @typedef {{type: 'move' | 'blocked', direction: import('./geometry.js').Direction}
+ * @typedef {{type: 'move' | 'blocked', direction: import('./geometry.js').Direction, source?: 'touchpad'}
  *   | {type: 'press' | 'back', handled: boolean}
  *   | {type: 'action', action: import('./manager.js').Action, handled: boolean}} NavigationEvent
- *   `blocked`: nothing to move to. `press`: handled when an enabled element with onPress took Cross.
+ *   `blocked`: nothing to move to; `source` is 'touchpad' for a step of a swipe. `press`: handled when
+ *   an enabled element with onPress took Cross.
  */
 /** @type {Set<(event: NavigationEvent) => void>} */
 export const navigationListeners = new Set();
@@ -46,3 +48,7 @@ subscribeInput(action => {
     emit({type: 'action', action, handled: manager.action(action)});
   }
 });
+
+const touchpad = new TouchNavigator(direction =>
+  emit({type: manager.move(direction) ? 'move' : 'blocked', direction, source: 'touchpad'}));
+subscribeTouch((x, y) => touchpad.touch(x, y));
