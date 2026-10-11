@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v12) is
+each host installs before the bundle runs. Its exact shape (ABI v13) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -349,9 +349,19 @@ has shown a console staying awake through its rest-mode timeout.
 
 `<Video>` ([VIDEO.md](VIDEO.md)) is built on `video.open(source, options)`, which returns the
 player's id and the name of the placeholder image its `<Image layer>` draws, `video.close(id)`,
-setters for pause, seek, volume, mute, loop, resize mode, audio delay, audio and subtitle track,
+setters for pause, seek, volume, mute, loop, resize mode, audio delay, audio output (ABI v13), audio and subtitle track,
 `video.addSubtitle(id, source, language, title)` for a subtitle file, and `video.poll()`, every open
 player's status, read each frame while one is open. Apps use the component.
+
+## AudioOutput (ABI v13)
+
+`AudioOutput.capabilities()` returns what the TV or AV receiver the console outputs to takes, read
+from its EDID at the call: `{known, name, formats, passthrough, pcmChannels}`. `formats` lists each
+codec the EDID's audio descriptors name (`{codec, channels, sampleRates, bitDepths?, maxBitrate?}`),
+`passthrough` the codecs a `<Video audioOutput="auto">` sends it undecoded (`'ac3'`, `'eac3'`,
+`'dts'`), `pcmChannels` the most PCM channels it takes. [VIDEO.md](VIDEO.md#audio-output) has the
+fields and how passthrough plays. The PS5 host reads the EDID with `sceVideoOutGetHdmiRawEdid_`; the
+desktop preview has none and returns `known: false` with empty lists.
 
 ## Display
 
@@ -422,6 +432,8 @@ desktop preview runs itself again.
   `release` and `trigger` (`tools/ps5_drive.py`) or the same input-script steps.
 - Sounds play through SDL's default output. `SDL_AUDIODRIVER=dummy` keeps the
   preview silent; the self-test sets it.
+- `AudioOutput.capabilities()` reports `known: false`, and `<Video>` decodes
+  every track: there is no HDMI sink to read or to pass a bitstream to.
 
 ## Hardware status
 

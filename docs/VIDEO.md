@@ -41,6 +41,7 @@ and `<Video>` reports how to turn it on. `apps/video-lab` plays everything in it
 | `startTime` | Seconds to start at, for resuming |
 | `audioDelay` | Seconds (-2 to 2) the sound plays later than the picture, to match a TV that shows the picture late; negative for earlier |
 | `audio` | `false` decodes no audio and leaves the mixer to other players (default `true`) |
+| `audioOutput` | `'pcm'` (default) decodes the track to the mixer; `'auto'` sends AC-3, E-AC-3 and DTS to the TV or receiver undecoded when its EDID lists them; `'passthrough'` sends them whatever the EDID says. See [Audio output](#audio-output) |
 | `onLoad({duration, currentTime, naturalSize, audioTracks})` | Once, when the first picture or sound is ready |
 | `onProgress({currentTime, playableDuration, seekableDuration})` | Every `progressUpdateInterval` ms (250) while playing |
 | `onBuffer({isBuffering})`, `onSeek({currentTime})`, `onEnd()`, `onError({error})` | State changes |
@@ -54,7 +55,7 @@ The ref has `seek(seconds)`, `selectAudioTrack(index)` (an `index` from
 `duration`, `buffered`, `width`, `height`, `videoCodec`, `audioCodec`, `decoder`
 (`'sceVideodec2'` or `'ffmpeg'`), `audioTracks`, `audioTrack`, `shownFrames`,
 `droppedFrames`, `lateMs` (how far, on average, a picture is shown past its time),
-`audioClock` (whether audio is the clock), `subtitleTracks` (`{index, language,
+`audioClock` (whether audio is the clock), `audioPassthrough` (whether the sink decodes the track), `subtitleTracks` (`{index, language,
 title, codec, external}`), `subtitleTrack` and `subtitle`.
 
 ## Subtitles
@@ -91,13 +92,71 @@ a 4K picture decoded in software runs the app's heap out of memory. One video pe
 hardware decoder plays at a time (one H.264, one HEVC, one VP9); another one of the
 same codec decodes in software when it fits.
 
-Audio of any layout and rate is mixed down to the mixer's 48 kHz stereo. There is
-no surround output and no bitstream passthrough.
+Decoded audio of any layout and rate is mixed down to the mixer's 48 kHz stereo. AC-3, E-AC-3 and
+DTS can instead go to the TV or receiver undecoded, surround and all: see [Audio output](#audio-output).
 
 HDR10 and HLG are tone-mapped to SDR in the shader (BT.2100 to BT.709, reference
 white at 203 nits, a soft shoulder): the presenter outputs 8-bit SDR, so the TV
 does not switch to HDR. Dolby Vision profile 5 is not supported; other Dolby
 Vision streams play their HDR10 base layer.
+
+## Audio output
+
+`audioOutput` picks where the track goes:
+
+| | |
+| --- | --- |
+| `'pcm'` (default) | Decoded and mixed down to 48 kHz stereo, with the app's sounds |
+| `'auto'` | AC-3, E-AC-3 and DTS at 48 kHz pass through to the sink when its EDID lists the codec (an E-AC-3 decoder counts for AC-3, a DTS-HD one for DTS); everything else is decoded |
+| `'passthrough'` | AC-3, E-AC-3 and DTS at 48 kHz pass through whatever the EDID says (for a sink whose EDID is wrong or unreadable); the rest is decoded |
+
+Passed through, the frames are packed as IEC 61937 bursts, byte for byte as FFmpeg's `spdif`
+muxer writes them, and the PS5 sends them on the HDMI output its disc player uses
+(`sceAudioOutExConfigureOutput` and `sceAudioOutExOpen`): AC-3 and DTS on a 48 kHz carrier, E-AC-3 on
+192 kHz. DTS sends the core only: a DTS-HD MA or DTS:X track plays as its DTS core (5.1 at most), and
+DTS Express, which has no core, is decoded. TrueHD is always decoded: it does not pass through. If the
+console refuses the output, the track is decoded instead. Changing `audioOutput` reads the track again
+from the playhead, as changing the track does; `status.audioPassthrough` says which happened.
+
+While a track passes through:
+
+- **Clock.** The bursts the output has read are the clock, as decoded samples are, so pause, seek and
+  buffering work the same. A seek starts the sound at the frame the target falls in (at most 32 ms
+  before it), since a burst cannot be cut. The sink decodes after the console, which may delay the
+  sound a frame or more; `audioDelay` corrects what remains.
+- **Volume.** A bitstream has no volume: `volume` does nothing, the sink's volume is the one. `muted`
+  (or `volume` 0) sends silence.
+- **Switching.** Opening the output switches the HDMI audio mode, so the sink may take a moment to
+  lock on, and so may switching between AC-3, E-AC-3 and DTS. A seek or pause keeps the output open.
+  Pausing cuts a burst short, which the sink drops: a frame's sound (32 ms) may go missing there.
+- **App sounds.** The app's sounds still play through the mixer's stereo output. Whether the
+  console mixes them in while its HDMI output carries a bitstream is not established yet.
+
+`AudioOutput.capabilities()` reads the connected sink's EDID now, so an app can decide what to ask a
+media server for before it opens a video:
+
+```js
+import {AudioOutput} from '@ps5-react/core';
+
+const sink = AudioOutput.capabilities();
+// {known: true, name: 'AVR-X1700H',
+//  formats: [{codec: 'pcm', channels: 8, sampleRates: [32000, ..., 192000], bitDepths: [16, 20, 24]},
+//            {codec: 'ac3', channels: 6, sampleRates: [32000, 44100, 48000], maxBitrate: 640000},
+//            {codec: 'eac3', channels: 8, sampleRates: [44100, 48000]}, {codec: 'truehd', ...}, ...],
+//  passthrough: ['ac3', 'eac3', 'dts'], pcmChannels: 8}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `known` | An EDID was read. `false` on the desktop preview (and then `formats` and `passthrough` are empty) |
+| `name` | The sink's EDID name, `''` when it has none |
+| `formats` | Every codec the EDID's audio descriptors list, merged per codec: `codec` (`'pcm'`, `'ac3'`, `'eac3'`, `'dts'`, `'dtshd'`, `'truehd'`, `'aac'`, `'mp3'`, `'mp2'`, ...), the most `channels`, `sampleRates` in Hz, `bitDepths` for PCM, `maxBitrate` in bit/s where the descriptor gives one. A TV with only the EDID's basic audio flag lists two-channel PCM |
+| `passthrough` | The codecs this host sends to this sink undecoded with `audioOutput: 'auto'`: `'ac3'`, `'eac3'`, `'dts'` |
+| `pcmChannels` | The most PCM channels the sink takes (2 when it lists none). Decoded audio is still stereo |
+
+It reads the EDID through `sceVideoOutGetHdmiRawEdid_` at each call (a request to a system service,
+not yet timed): call it when needed, not every frame. Through an AV receiver the EDID is the
+receiver's. **Not yet validated on hardware** inside an app: see [HARDWARE.md](HARDWARE.md#hdmi-audio-passthrough--2026-10-11).
 
 ## How it plays
 
@@ -165,5 +224,7 @@ console's eight cores. Most of the 4K cost is moving each picture to the GPU, 12
 - HDR10 output: the scanout has to be registered as 10-bit BT.2100 PQ (EVO Player does it
   on AGC), and the OpenGL layer that owns it offers no way to ask for that.
 - Bitmap subtitles (PGS, DVD), ASS styling.
-- AV1 (dav1d), Dolby Vision profile 5, surround output.
+- AV1 (dav1d), Dolby Vision profile 5.
+- Multichannel PCM: decoded surround is mixed down to stereo; only passthrough carries surround.
+- TrueHD and DTS-HD MA / DTS:X passthrough (DTS sends its core).
 - Matching the display's refresh rate to the film (24p judder at 60 Hz).

@@ -25,6 +25,7 @@ No proprietary Sony modules are redistributed.
 | ArtCNN C4F16 | The mpv user shader `GLSL/ArtCNN_C4F16.glsl` of [ArtCNN](https://github.com/Artoriuz/ArtCNN) at commit `8789539dfae120f2877a89bb6218026d56809612`, unchanged, embedded by `native/shared/upscalers/ArtCNN_C4F16.glsl.inc` for `<Video upscale>`. MIT; builds copy `licenses/ArtCNN-LICENSE` to `notices/`. |
 | Anime4K Upscale CNN x2 | The mpv user shaders `glsl/Upscale/Anime4K_Upscale_CNN_x2_{S,M,L,VL,UL}.glsl` of [Anime4K](https://github.com/bloc97/Anime4K) at commit `7684e9586f8dcc738af08a1cdceb024cc184f426`, unchanged, embedded by `native/shared/upscalers/` for `<Video upscale>`. MIT; builds copy `licenses/Anime4K-LICENSE` to `notices/`. |
 | PS5 video decoder interface | `native/ps5/video_decoder.cpp` is new GPL-3.0-or-later code against the `libSceVideodec2` interface as ProsperoLight and EVO Player (both GPL-3.0) established it; no Sony code or headers. The import stub is generated from function names at build time. Builds copy `licenses/video-decoder-NOTICE.txt` to `notices/`. |
+| HDMI audio passthrough | `native/shared/iec61937.hpp` is ported from [SlopFin](https://github.com/BeLikeBrett/SlopFin)'s `src/iec61937.hpp` at commit `6e22b23e7ececf1af24cb2850536411f91ebb9d6` (Copyright (C) 2026 Brett, GPL-3.0-or-later), an independent implementation of the IEC 61937 layout FFmpeg's spdif muxer writes; `native/ps5/bitstream_output.cpp` is new GPL-3.0-or-later code following SlopFin's findings on the `sceAudioOutEx` output calls and modes. No Sony code or headers. Video apps' builds copy `licenses/audio-passthrough-NOTICE.txt` to `notices/`. |
 | Inter / LLVM / payload SDK | Inter: SIL OFL. LLVM: Apache-2.0 with exceptions. The public SDK contains separately licensed components. |
 
 Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
@@ -42,7 +43,8 @@ Sources: [Embedded React](https://github.com/TheMasterCoder007/embedded-react),
 [Tailwind CSS v3.4.17](https://github.com/tailwindlabs/tailwindcss/tree/v3.4.17),
 [FFmpeg 7.1.5](https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz),
 [ProsperoLight](https://github.com/blackbearreloaded/ProsperoLight),
-[EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5).
+[EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5),
+[SlopFin](https://github.com/BeLikeBrett/SlopFin).
 
 Exact revisions, archive hashes, and compiler-rt package identity are recorded
 in `dependencies.lock.json`; each local build also creates a receipt.

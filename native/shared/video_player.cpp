@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "video_player.hpp"
+#include "audio_sink.hpp"
+#include "burst_ring.hpp"
+#include "iec61937.hpp"
 #include "video_audio.hpp"
 #include "thread_name.hpp"
 #include "audio/stream_ring.hpp"
@@ -172,30 +175,56 @@ int decoder_threads() {
 }
 
 int interrupted(void* opaque) { return static_cast<std::atomic<bool>*>(opaque)->load() ? 1 : 0; }
+
+// The codecs a sink can be sent undecoded, at the 48 kHz their carriers are paced for. DTS Express has no
+// core to send.
+bool bitstream_codec(const AVCodecParameters* parameters, iec61937::Codec& codec) {
+  if (parameters->sample_rate != 48000) return false;
+  switch (parameters->codec_id) {
+    case AV_CODEC_ID_AC3: codec = iec61937::Codec::ac3; return true;
+    case AV_CODEC_ID_EAC3: codec = iec61937::Codec::eac3; return true;
+    case AV_CODEC_ID_DTS: codec = iec61937::Codec::dts; return parameters->profile != AV_PROFILE_DTS_EXPRESS;
+    default: return false;
+  }
+}
+
+bool sink_takes(iec61937::Codec codec) {
+  const audio_sink::Capabilities caps = audio_sink::current();
+  return codec == iec61937::Codec::ac3 ? caps.ac3 : codec == iec61937::Codec::eac3 ? caps.eac3 : caps.dts;
+}
 } // namespace
 
-// Stereo float PCM of one serial: written by the audio thread, read by the mixer while routed.
+// The audio of one serial, written by the audio thread and read while routed: stereo float PCM at 48 kHz
+// by the mixer, or IEC 61937 bursts at their carrier's rate by the bitstream output.
 class AudioRing {
 public:
-  explicit AudioRing(std::uint64_t serial) : serial(serial) {}
+  AudioRing(std::uint64_t serial, int bitstream_rate) : serial(serial), rate(bitstream_rate ? bitstream_rate : kAudioRate) {
+    // 0.68 s either way.
+    if (bitstream_rate) burst = std::make_unique<BurstRing>(bitstream_rate > kAudioRate ? 1u << 17 : 1u << 15);
+    else pcm = std::make_unique<hui::audio::StreamRing>(1u << 15);
+  }
   const std::uint64_t serial;
-  hui::audio::StreamRing ring{1u << 15};       // 0.68 s at 48 kHz
+  const int rate; // frames per second
+  std::unique_ptr<hui::audio::StreamRing> pcm;
+  std::unique_ptr<BurstRing> burst;
   std::atomic<std::int64_t> start_us{kNoPts};  // media time of the first frame
   std::atomic<std::uint64_t> written{0};
   std::atomic<bool> ended{false};              // the stream's last samples are in
 
-  // The media time the listener hears; it stands still while the mixer does not read the ring.
+  std::size_t available() const { return pcm ? pcm->available() : burst->available(); }
+  // The media time the listener hears; it stands still while the ring is not read.
   std::int64_t heard_us() const {
-    const std::uint64_t played = written.load() - ring.available();
-    return start_us.load() + static_cast<std::int64_t>(played) * 1000000 / kAudioRate - kAudioLatencyUs;
+    const std::uint64_t played = written.load() - available();
+    return start_us.load() + static_cast<std::int64_t>(played) * 1000000 / rate - kAudioLatencyUs;
   }
-  std::int64_t buffered_us() const { return static_cast<std::int64_t>(ring.available()) * 1000000 / kAudioRate; }
-  bool finished() const { return ended.load() && ring.available() == 0; }
+  std::int64_t buffered_us() const { return static_cast<std::int64_t>(available()) * 1000000 / rate; }
+  bool finished() const { return ended.load() && available() == 0; }
 };
 
 Player::Player(std::string url, const Options& options) : url_(std::move(url)), options_(options) {
   loop_ = options.loop;
   audio_output_ = decode_audio_ = options.audio;
+  audio_mode_ = options.audio_output;
   muted_ = options.muted;
   volume_ = std::clamp(options.volume, 0.0f, 1.0f);
   playing_ = !options.paused;
@@ -225,8 +254,7 @@ Player::~Player() {
 }
 
 std::vector<std::shared_ptr<void>> Player::detach_audio() {
-  if (routed_) video_audio::route(nullptr);
-  routed_ = false;
+  if (routed_) route(nullptr, 0);
   std::vector<std::shared_ptr<void>> rings;
   if (clock_ring_) rings.push_back(clock_ring_);
   for (auto& [ring, until] : retired_) rings.push_back(ring);
@@ -551,20 +579,79 @@ void Player::audio_main() {
   AVFrame* decoded = av_frame_alloc();
   std::vector<float> out;
   int stream_index = -1;
+  AudioOutput stream_mode = AudioOutput::pcm;
   std::uint64_t serial = 0;
   std::shared_ptr<AudioRing> ring;
+  // Passthrough: the packets are packed into bursts, not decoded.
+  bool bitstream = false;
+  iec61937::Codec codec = iec61937::Codec::ac3;
+  std::unique_ptr<iec61937::Packer> packer;
+  std::int64_t next_burst_us = kNoPts; // where the burst after the last one starts, for those with no time
 
-  const auto open = [&](int index) {
+  const auto open = [&](int index, AudioOutput mode) {
     avcodec_free_context(&context);
     swr_free(&resampler);
     stream_index = index;
+    stream_mode = mode;
+    const bool was_bitstream = bitstream;
+    bitstream = false;
+    if (index >= 0 && mode != AudioOutput::pcm && bitstream_codec(format_->streams[index]->codecpar, codec) &&
+        (mode == AudioOutput::passthrough || sink_takes(codec)))
+      bitstream = video_audio::open_bitstream(codec, this);
+    if (was_bitstream && !bitstream) video_audio::close_bitstream(this);
+    {
+      std::lock_guard lock(mutex_);
+      status_.audio_passthrough = bitstream;
+    }
+    if (bitstream) {
+      if (!packer) packer = std::make_unique<iec61937::Packer>();
+      packer->reset(codec);
+      return;
+    }
     if (index < 0) return;
     const AVStream* stream = format_->streams[index];
-    const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
-    if (!codec || !(context = avcodec_alloc_context3(codec))) return;
+    const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!decoder || !(context = avcodec_alloc_context3(decoder))) return;
     avcodec_parameters_to_context(context, stream->codecpar);
     context->pkt_timebase = stream->time_base;
-    if (avcodec_open2(context, codec, nullptr) < 0) avcodec_free_context(&context);
+    if (avcodec_open2(context, decoder, nullptr) < 0) avcodec_free_context(&context);
+  };
+
+  // Writes `frames` frames to the ring, waiting for room: the ring fills to its capacity, then waits for
+  // the mixer or the bitstream output, which paces the thread. False when a seek or close came first.
+  const auto fill = [&](const auto* data, std::size_t frames, auto write) {
+    while (frames && !quit_) {
+      const std::size_t wrote = write(data, frames);
+      ring->written += wrote;
+      data += wrote * 2;
+      frames -= wrote;
+      if (!frames) break;
+      std::unique_lock lock(mutex_);
+      if (serial != serial_) return false;
+      wake_.wait_for(lock, std::chrono::milliseconds(5));
+    }
+    return !quit_;
+  };
+
+  // A burst from the packer: timed by its first frame's packet, or as following the previous burst.
+  const auto burst = [&](const std::uint16_t* words, std::size_t frames, std::int64_t time) {
+    const std::int64_t at = time != kNoPts ? time : next_burst_us;
+    const std::int64_t length = static_cast<std::int64_t>(frames) * 1000000 / iec61937::carrier_rate(codec);
+    next_burst_us = at == kNoPts ? kNoPts : at + length;
+    std::int64_t trim;
+    {
+      std::lock_guard lock(mutex_);
+      if (serial != serial_) return;
+      trim = trim_before_us_;
+      if (!ring) {
+        ring = std::make_shared<AudioRing>(serial, iec61937::carrier_rate(codec));
+        filling_ = ring;
+      }
+    }
+    // A burst cannot be cut: the one the seek target falls in plays whole, the clock starting at its start.
+    if (at != kNoPts && at + length <= trim) return;
+    if (ring->start_us.load() == kNoPts) ring->start_us = at == kNoPts ? trim : at;
+    fill(words, frames, [&](const std::uint16_t* data, std::size_t count) { return ring->burst->write(data, count); });
   };
 
   while (true) {
@@ -577,10 +664,13 @@ void Player::audio_main() {
         serial = serial_;
         ring.reset();
         const int index = decode_audio_ ? audio_index_ : -1;
+        const AudioOutput mode = audio_mode_;
         lock.unlock();
-        if (index != stream_index || !context) open(index);
-        else avcodec_flush_buffers(context);
+        if (index != stream_index || mode != stream_mode || (!context && !bitstream)) open(index, mode);
+        else if (context) avcodec_flush_buffers(context);
+        else packer->reset(codec);
         if (resampler) swr_init(resampler);
+        next_burst_us = kNoPts;
         continue;
       }
       packet = audio_packets_.front();
@@ -588,8 +678,25 @@ void Player::audio_main() {
       if (packet.packet) queued_bytes_ -= packet.packet->size;
     }
     wake_.notify_all();
-    if (packet.serial != serial || !context) {
+    if (packet.serial != serial || (!context && !bitstream)) {
       av_packet_free(&packet.packet);
+      continue;
+    }
+    if (bitstream) {
+      if (packet.packet) {
+        const AVStream* stream = format_->streams[stream_index];
+        const std::int64_t ts = packet.packet->pts != kNoPts ? packet.packet->pts : packet.packet->dts;
+        const std::int64_t at = ts == kNoPts ? kNoPts : av_rescale_q(ts, stream->time_base, kMicroseconds) - start_us_;
+        packer->feed(packet.packet->data, static_cast<std::size_t>(packet.packet->size), at, burst);
+        av_packet_free(&packet.packet);
+        continue;
+      }
+      packer->flush(burst);
+      std::lock_guard lock(mutex_);
+      if (serial == serial_) {
+        audio_eof_ = true;
+        if (ring) ring->ended = true;
+      }
       continue;
     }
     if (avcodec_send_packet(context, packet.packet) < 0 && packet.packet) {
@@ -644,7 +751,7 @@ void Player::audio_main() {
         if (serial != serial_) break;
         trim = trim_before_us_;
         if (!ring) {
-          ring = std::make_shared<AudioRing>(serial);
+          ring = std::make_shared<AudioRing>(serial, 0);
           filling_ = ring;
         }
       }
@@ -657,20 +764,13 @@ void Player::audio_main() {
         pts_us = trim;
       }
       if (ring->start_us.load() == kNoPts) ring->start_us = pts_us == kNoPts ? trim : pts_us;
-      // The ring fills to its capacity, then waits for the mixer: that paces decoding.
-      std::size_t left = static_cast<std::size_t>(frames);
-      while (left && !quit_) {
-        const std::size_t wrote = ring->ring.write(samples, left);
-        ring->written += wrote;
-        samples += wrote * 2;
-        left -= wrote;
-        if (!left) break;
-        std::unique_lock lock(mutex_);
-        if (serial != serial_) break;
-        wake_.wait_for(lock, std::chrono::milliseconds(5));
-      }
+      if (!fill(samples, static_cast<std::size_t>(frames), [&](const float* data, std::size_t count) {
+            return ring->pcm->write(data, count);
+          }))
+        break;
     }
   }
+  if (bitstream) video_audio::close_bitstream(this);
   av_frame_free(&decoded);
   avcodec_free_context(&context);
   swr_free(&resampler);
@@ -686,8 +786,16 @@ std::int64_t Player::media_now(std::int64_t now_us) const {
 void Player::route(const std::shared_ptr<AudioRing>& ring, std::int64_t now_us) {
   if (ring && routed_ && ring == clock_ring_) return;
   if (!ring && !routed_) return;
-  video_audio::route(ring ? &ring->ring : nullptr);
+  // PCM goes to the mixer's slot, bursts to the bitstream output; whichever slot had the old ring lets go.
+  const bool bitstream = ring ? static_cast<bool>(ring->burst) : routed_bitstream_;
+  if (routed_ && routed_bitstream_ != bitstream) {
+    if (routed_bitstream_) video_audio::route_bitstream(nullptr);
+    else video_audio::route(nullptr);
+  }
+  if (bitstream) video_audio::route_bitstream(ring ? ring->burst.get() : nullptr);
+  else video_audio::route(ring ? ring->pcm.get() : nullptr);
   routed_ = static_cast<bool>(ring);
+  routed_bitstream_ = bitstream;
   // The mixer may read a ring swapped out for a few more grains; it stays alive until then.
   if (clock_ring_ && clock_ring_ != ring) retired_.emplace_back(clock_ring_, now_us + 200'000);
   if (ring && ring != clock_ring_) audio_finished_ = false;
@@ -696,7 +804,18 @@ void Player::route(const std::shared_ptr<AudioRing>& ring, std::int64_t now_us) 
 }
 
 void Player::apply_gain() {
-  if (routed_) video_audio::set_gain(muted_ ? 0.0f : volume_);
+  if (!routed_) return;
+  if (routed_bitstream_) video_audio::set_bitstream_muted(muted_ || volume_ <= 0);
+  else video_audio::set_gain(muted_ ? 0.0f : volume_);
+}
+
+void Player::set_audio_mode(AudioOutput mode) {
+  {
+    std::lock_guard lock(mutex_);
+    if (mode == audio_mode_) return;
+    audio_mode_ = mode;
+  }
+  if (audio_output_) seek(playhead_seconds());
 }
 
 void Player::set_audio_output(bool on) {
@@ -904,12 +1023,12 @@ void Player::update(std::int64_t now_us, std::int64_t frame_us) {
   // States.
   const bool started = has_video_ ? shown_serial_ == serial : audio_clock;
   const bool video_done = !has_video_ || (video_eof_ && frames_.empty());
-  const bool audio_done = !audio_clock || (clock_ring_->ended.load() && clock_ring_->ring.available() == 0) ||
+  const bool audio_done = !audio_clock || clock_ring_->finished() ||
                           !audio_output_ || audio_index_ < 0;
   // A stream run dry: nothing read ahead, and the picture or the sound has nothing left to play.
   const bool dry = network_ && started && playing_ && !demux_eof_ && demuxed_us_ - playhead_us_ < 500'000 &&
                    ((has_video_ && frames_.empty() && video_packets_.empty() && !video_eof_) ||
-                    (audio_clock && clock_ring_->ring.available() == 0 && audio_packets_.empty() &&
+                    (audio_clock && clock_ring_->available() == 0 && audio_packets_.empty() &&
                      !clock_ring_->ended.load()));
   const bool refilled = demux_eof_ || queued_bytes_ >= kMaxQueuedBytes || demuxed_us_ - playhead_us_ >= kResumeReadAheadUs;
   bool unroute = false;

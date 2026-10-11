@@ -351,10 +351,33 @@ on.
 - **Compiling** a model the first time it is used holds the render thread 0.5–0.8 s; the player
   dropped 18–37 pictures then.
 
+## HDMI audio passthrough — 2026-10-11
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus, the console's HDMI output on a Dell AW3225QF
+monitor. Read-only probes sent as payloads, not the app:
+
+- `sceVideoOutGetHdmiRawEdid_(buffer, 513)` returned 0 with a block count (3) followed by the
+  monitor's EDID: base block, CTA-861 and DisplayID extensions, each checksum valid. The first
+  header byte read 0x09 where the standard has 0x00; the parser does not check the header. The CTA
+  block has no audio data block and its basic-audio flag is clear, so `AudioOutput.capabilities()`
+  would list no formats and no passthrough codecs for it (`tools/tests/media/edid-monitor-no-audio.bin`
+  is that EDID with its serial numbers blanked).
+- `sceAudioOutExGetMonitorInfo(0, 0, buffer, 1024)` also answers from a payload, with 889 bytes of
+  a layout of its own that contains the EDID's vendor, model and HDR metadata; the EDID is read
+  instead because its audio descriptors are standard.
+
+Not checked: the app itself (`apps/video-lab` as `PPSA99064` was built and uploaded, but
+ShadowMountPlus did not register the new title within 25 minutes, and another app was running on
+the console), so `sceAudioOutExConfigureOutput` and `sceAudioOutExOpen` have not been called from
+PS5 React, nor has a bitstream reached a sink. SlopFin reports them working from its app on
+firmware 8.20, with AC-3, E-AC-3 and DTS heard on a TV. A/V sync with a real receiver is unmeasured.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,
   but no console has been observed staying out of rest mode with it on.
+- HDMI audio passthrough (`<Video audioOutput>`, ABI v13): the bitstream output has not been opened
+  from a PS5 React app; see above.
 
 ## Remote images — 2026-10-06
 

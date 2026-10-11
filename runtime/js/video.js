@@ -21,10 +21,13 @@ const upscaleModel = upscale => (upscale === true ? 'artcnn' : upscale || '');
  * track and reads the status. `upscale` names a network for animation that doubles a picture shown
  * bigger than its source ('artcnn' or true, 'anime4k-s', 'anime4k-m', 'anime4k-l', 'anime4k-vl',
  * 'anime4k-ul'), where the GPU runs compute shaders (the PS5); elsewhere it scales as before.
+ * `audioOutput` is 'pcm' (decoded, the default), 'auto' (AC-3, E-AC-3 and DTS at 48 kHz go undecoded to a
+ * sink whose EDID lists them; see AudioOutput.capabilities()) or 'passthrough' (those go undecoded
+ * whatever the EDID says). Passed through, `volume` does nothing: the sink's volume is the one.
  */
 export const Video = forwardRef(function Video(props, ref) {
   const {source, paused = false, muted = false, volume = 1, repeat = false, resizeMode = 'contain', upscale = false, audio = true,
-         startTime = 0, audioDelay = 0, progressUpdateInterval = 250, subtitles, subtitleTrack = -1, onLoad, onProgress, onBuffer, onSeek,
+         startTime = 0, audioDelay = 0, audioOutput = 'pcm', progressUpdateInterval = 250, subtitles, subtitleTrack = -1, onLoad, onProgress, onBuffer, onSeek,
          onEnd, onError, onStatus, onSubtitle, style, ...rest} = props;
   const uri = typeof source === 'string' ? source : source?.uri;
   const headers = typeof source === 'object' ? source?.headers : undefined;
@@ -43,7 +46,8 @@ export const Video = forwardRef(function Video(props, ref) {
       state.status = status;
       const p = state.props;
       const changed = !previous || previous.state !== status.state || previous.paused !== status.paused ||
-        previous.seeking !== status.seeking || previous.audioTrack !== status.audioTrack;
+        previous.seeking !== status.seeking || previous.audioTrack !== status.audioTrack ||
+        previous.audioPassthrough !== status.audioPassthrough;
       if (changed) p.onStatus?.(status);
       if ((previous?.subtitle ?? '') !== status.subtitle) p.onSubtitle?.(status.subtitle);
       if (status.state === 'failed') {
@@ -70,7 +74,7 @@ export const Video = forwardRef(function Video(props, ref) {
         p.onProgress({currentTime: status.position, playableDuration: status.buffered, seekableDuration: status.duration});
       }
     };
-    const player = openVideo(uri, {paused, muted, volume, loop: repeat, start: startTime, audio, headers}, listener);
+    const player = openVideo(uri, {paused, muted, volume, loop: repeat, start: startTime, audio, headers, audioOutput}, listener);
     player.setResizeMode(FITS[resizeMode] ?? 0);
     player.setUpscale(upscaleModel(upscale));
     player.setAudioDelay(audioDelay);
@@ -89,6 +93,7 @@ export const Video = forwardRef(function Video(props, ref) {
   useEffect(() => { self.current.player?.setVolume(volume); }, [volume]);
   useEffect(() => { self.current.player?.setLoop(repeat); }, [repeat]);
   useEffect(() => { self.current.player?.setAudioDelay(audioDelay); }, [audioDelay]);
+  useEffect(() => { self.current.player?.setAudioOutput(audioOutput); }, [audioOutput]);
   useEffect(() => { self.current.player?.setResizeMode(FITS[resizeMode] ?? 0); }, [resizeMode]);
   useEffect(() => { self.current.player?.setUpscale(upscaleModel(upscale)); }, [upscale]);
   useEffect(() => { self.current.player?.selectSubtitleTrack(subtitleTrack); }, [subtitleTrack]);

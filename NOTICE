@@ -21,3 +21,7 @@ Material Design sound resources, (c) Google, under CC BY 4.0
 
 Browser capture includes adaptations of Orbit Store 1.0.1 by saawant12,
 GPL-3.0-or-later. See native/ps5/payloads/browser/README.md for provenance.
+
+The IEC 61937 packer for HDMI audio passthrough (native/shared/iec61937.hpp) is
+ported from SlopFin by Brett, GPL-3.0-or-later; the bitstream output follows
+SlopFin's console findings. See licenses/audio-passthrough-NOTICE.txt.

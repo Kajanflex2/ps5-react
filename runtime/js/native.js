@@ -299,6 +299,20 @@ export const Display = {
   setRefreshRate: hz => host().display.setRefreshRate(hz),
 };
 
+export const AudioOutput = {
+  /**
+   * What the TV or AV receiver the console outputs to takes, from its EDID, read now: decide from it what
+   * to ask a media server for, and whether a `<Video audioOutput="auto">` will pass a track through.
+   * `passthrough` lists the codecs this host can send undecoded to it ('ac3', 'eac3', 'dts': the DTS core);
+   * `pcmChannels` is the most PCM channels it takes (decoded audio still plays as 48 kHz stereo). `known` is
+   * false without an EDID (the desktop preview): then `formats` and `passthrough` are empty.
+   * @returns {{known: boolean, name: string, formats: Array<{codec: string, channels: number,
+   *   sampleRates: number[], bitDepths?: number[], maxBitrate?: number}>,
+   *   passthrough: Array<'ac3' | 'eac3' | 'dts'>, pcmChannels: number}}
+   */
+  capabilities: () => host().audioOutput.capabilities(),
+};
+
 export const Fonts = {
   /**
    * The interface language, as a BCP 47 tag ('ja', 'zh-Hans', 'ar'), for text drawn from the
@@ -642,7 +656,7 @@ function pollVideos() {
  * while it is open. Returns the engine image name its `<Image layer>` draws and the controls.
  * @param {string} source an app path or http(s) URL
  * @param {{paused?: boolean, muted?: boolean, loop?: boolean, volume?: number, start?: number,
- *   audio?: boolean, headers?: Record<string, string>}} options
+ *   audio?: boolean, headers?: Record<string, string>, audioOutput?: 'pcm' | 'auto' | 'passthrough'}} options
  * @param {(status: object) => void} listener
  */
 export function openVideo(source, options, listener) {
@@ -658,6 +672,7 @@ export function openVideo(source, options, listener) {
     setMuted: muted => video.setMuted(id, !!muted),
     setLoop: loop => video.setLoop(id, !!loop),
     setAudioDelay: seconds => video.setAudioDelay(id, seconds),
+    setAudioOutput: mode => video.setAudioOutput(id, mode),
     setResizeMode: mode => video.setResizeMode(id, mode),
     setUpscale: model => video.setUpscale(id, model),
     selectAudioTrack: index => video.selectAudioTrack(id, index),

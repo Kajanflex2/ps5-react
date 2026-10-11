@@ -79,6 +79,17 @@ double get_number(JSContext* ctx, JSValueConst object, const char* key, double f
   return std::isfinite(result) ? result : fallback;
 }
 
+// 'pcm', 'auto' or 'passthrough'; false for anything else.
+bool audio_output_mode(JSContext* ctx, JSValueConst value, video::AudioOutput& mode) {
+  const char* name = JS_ToCString(ctx, value);
+  if (!name) return false;
+  const bool known = !std::strcmp(name, "pcm") || !std::strcmp(name, "auto") || !std::strcmp(name, "passthrough");
+  mode = !std::strcmp(name, "auto") ? video::AudioOutput::automatic
+       : !std::strcmp(name, "passthrough") ? video::AudioOutput::passthrough : video::AudioOutput::pcm;
+  JS_FreeCString(ctx, name);
+  return known;
+}
+
 Entry* entry_arg(JSContext* ctx, JSValueConst value, const char* call) {
   std::uint32_t id = 0;
   if (JS_ToUint32(ctx, &id, value)) return nullptr;
@@ -111,6 +122,10 @@ JSValue open(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     options.audio = get_bool(ctx, settings, "audio", true);
     options.volume = static_cast<float>(get_number(ctx, settings, "volume", 1));
     options.start = get_number(ctx, settings, "start", 0);
+    JSValue output = JS_GetPropertyStr(ctx, settings, "audioOutput");
+    const bool known = JS_IsUndefined(output) || audio_output_mode(ctx, output, options.audio_output);
+    JS_FreeValue(ctx, output);
+    if (!known) return JS_ThrowRangeError(ctx, "video.open %s: audioOutput is 'pcm', 'auto' or 'passthrough'", source.c_str());
     JSValue headers = JS_GetPropertyStr(ctx, settings, "headers");
     if (JS_IsObject(headers)) {
       JSPropertyEnum* names = nullptr;
@@ -235,6 +250,16 @@ JSValue set_upscale(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
   return JS_UNDEFINED;
 }
 
+JSValue set_audio_output(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+  Entry* entry = argc >= 2 ? entry_arg(ctx, argv[0], "video.setAudioOutput") : nullptr;
+  if (!entry) return argc >= 2 ? JS_EXCEPTION : JS_ThrowTypeError(ctx, "video.setAudioOutput: expected id and mode");
+  video::AudioOutput mode;
+  if (!audio_output_mode(ctx, argv[1], mode))
+    return JS_ThrowRangeError(ctx, "video.setAudioOutput: 'pcm', 'auto' or 'passthrough'");
+  entry->player->set_audio_mode(mode);
+  return JS_UNDEFINED;
+}
+
 JSValue select_subtitle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   Entry* entry = argc >= 2 ? entry_arg(ctx, argv[0], "video.selectSubtitleTrack") : nullptr;
   std::int32_t index = -1;
@@ -314,6 +339,7 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JS_SetPropertyStr(ctx, item, "droppedFrames", JS_NewFloat64(ctx, static_cast<double>(status.dropped_frames)));
     JS_SetPropertyStr(ctx, item, "lateMs", JS_NewFloat64(ctx, status.late_ms));
     JS_SetPropertyStr(ctx, item, "audioClock", JS_NewBool(ctx, status.audio_clock));
+    JS_SetPropertyStr(ctx, item, "audioPassthrough", JS_NewBool(ctx, status.audio_passthrough));
     JSValue tracks = JS_NewArray(ctx);
     std::uint32_t at = 0;
     for (const video::Track& track : status.audio_tracks) {
@@ -434,10 +460,10 @@ std::string summary() {
     const video::Status s = entry.player->status();
     char line[384];
     std::snprintf(line, sizeof line, "%svideo %u %s %.1f/%.1fs buffered %.1fs %s %dx%d via %s shown=%llu dropped=%llu "
-                  "late=%.1fms clock=%s queue=%d/%d starved=%d%s%s", out.empty() ? "" : "\n", entry.id, state_name(s.state), s.position,
+                  "late=%.1fms clock=%s%s queue=%d/%d starved=%d%s%s", out.empty() ? "" : "\n", entry.id, state_name(s.state), s.position,
                   s.duration, s.buffered, s.video_codec.c_str(), s.width, s.height, s.decoder.c_str(),
                   static_cast<unsigned long long>(s.shown_frames), static_cast<unsigned long long>(s.dropped_frames),
-                  s.late_ms, s.audio_clock ? "audio" : "wall", s.queued_frames, s.queued_packets, s.starved_updates,
+                  s.late_ms, s.audio_clock ? "audio" : "wall", s.audio_passthrough ? " passthrough" : "", s.queued_frames, s.queued_packets, s.starved_updates,
                   s.error.empty() ? "" : " error=", s.error.c_str());
     out += line;
   }
@@ -461,7 +487,7 @@ JSValue ps5_react_video_api(JSContext* ctx) {
   const struct { const char* name; JSCFunction* call; int length; } functions[] = {
     {"open", open, 2}, {"close", close, 1}, {"setPaused", set_paused, 2}, {"seek", seek, 2},
     {"setVolume", set_volume, 2}, {"setMuted", set_muted, 2}, {"setLoop", set_loop, 2},
-    {"setAudioDelay", set_audio_delay, 2},
+    {"setAudioDelay", set_audio_delay, 2}, {"setAudioOutput", set_audio_output, 2},
     {"setResizeMode", set_fit, 2}, {"setUpscale", set_upscale, 2}, {"selectAudioTrack", select_audio, 2},
     {"selectSubtitleTrack", select_subtitle, 2}, {"addSubtitle", add_subtitle, 4}, {"poll", poll, 0},
   };

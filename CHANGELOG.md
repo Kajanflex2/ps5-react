@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — HDMI audio passthrough
+
+- `<Video audioOutput>`: `'pcm'` (the default, as before) decodes the track; `'auto'` sends AC-3,
+  E-AC-3 and DTS (the core) at 48 kHz to the TV or receiver undecoded when its EDID lists the codec;
+  `'passthrough'` does so whatever the EDID says. Frames are packed as IEC 61937 bursts (ported from
+  SlopFin, checked byte for byte against FFmpeg's spdif muxer) and sent on the HDMI output the
+  console's disc player uses. The bursts are the clock, so pause, seek and buffering work as with
+  decoded audio; `volume` has no effect on a bitstream, `muted` sends silence. The status has
+  `audioPassthrough`. TrueHD and multichannel PCM output are not supported: decoded audio stays stereo.
+- `AudioOutput.capabilities()` (native ABI v13): the connected sink's audio formats from its EDID, the
+  codecs it can be passed, and its most PCM channels, for an app to decide what to ask a media
+  server for. The desktop preview reports `known: false`.
+
 ## Unreleased — light on glass
 
 - Add the View styles `roundedClip` and `mixBlendMode: 'plus-lighter'`

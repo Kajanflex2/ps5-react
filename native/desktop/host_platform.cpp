@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
+#include "audio_sink.hpp"
 #include "host_platform.hpp"
 #include "storage_stats.hpp"
 #include "audio/mixer.hpp"
@@ -223,6 +224,12 @@ void stop_audio() {
   audio_device = 0;
   SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
+
+// The preview has no HDMI sink to read or to send a bitstream to: video audio is always decoded.
+bool has_bitstream() { return false; }
+bool open_bitstream(iec61937::Codec, BitstreamFill) { return false; }
+void close_bitstream() {}
+bool sink_edid(std::vector<std::uint8_t>&) { return false; }
 } // namespace host
 
 bool desktop_relaunch_requested() { return host::relaunch; }

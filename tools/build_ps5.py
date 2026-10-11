@@ -150,6 +150,7 @@ def main():
                ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_writer.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/browser_capture_api.cpp", ROOT / "native/shared/lan.cpp", ROOT / "native/shared/lan_api.cpp", ROOT / "native/ps5/browser_capture.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", layout_dirs[0] / "sounds.generated.c",
+               ROOT / "native/shared/audio_sink.cpp", ROOT / "native/shared/audio_output_api.cpp", ROOT / "native/ps5/bitstream_output.cpp",
                ROOT / "native/shared/gl_presenter.cpp", ROOT / "native/shared/gl_video.cpp", ROOT / "native/shared/gl_upscale.cpp", ROOT / "native/shared/video_api.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/js_profiler.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/render_workers.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", *layout_assets,
                layouts_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
@@ -330,13 +331,14 @@ def main():
         shutil.copy2(source, notices / name)
     if (gl.parent / "LICENSES").exists():
         shutil.copytree(gl.parent / "LICENSES", notices / "ps5-opengl", dirs_exist_ok=True)
-    for name in ("ffmpeg-LICENSE.md", "ffmpeg-COPYING.LGPLv3", "video-decoder-NOTICE.txt"):
+    for name in ("ffmpeg-LICENSE.md", "ffmpeg-COPYING.LGPLv3", "video-decoder-NOTICE.txt", "audio-passthrough-NOTICE.txt"):
         (notices / name).unlink(missing_ok=True)
     if config.get("video"):
         # FFmpeg as configured is LGPL-3.0-or-later (tools/ffmpeg.py).
         shutil.copy2(ffmpeg.source() / "LICENSE.md", notices / "ffmpeg-LICENSE.md")
         shutil.copy2(ffmpeg.source() / "COPYING.LGPLv3", notices / "ffmpeg-COPYING.LGPLv3")
         shutil.copy2(ROOT / "licenses/video-decoder-NOTICE.txt", notices / "video-decoder-NOTICE.txt")
+        shutil.copy2(ROOT / "licenses/audio-passthrough-NOTICE.txt", notices / "audio-passthrough-NOTICE.txt")
     shutil.copy2(ROOT / "docs/DEPENDENCIES.md", notices / "SOURCES.md")
     run([host_tool, "self", "--inspect", "--file", app / "eboot.bin"])
     run([host_tool, "self", "--inspect", "--file", app / "sce_module/libc.prx"])

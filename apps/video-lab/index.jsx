@@ -4,14 +4,25 @@
 // Video Lab: plays every file in /app0/media and every URL listed in /app0/media/urls.txt
 // ("Label | URL" per line), with the player's measurements on screen. media/ is not part of the
 // repository: copy test footage there (on the PS5, into the title folder's media/).
-// For unattended runs, /app0/dev/playlist.txt ("file seconds [seek-to] [upscaler]" per line, the upscaler
-// one of UPSCALERS) plays each file for that long, logs a summary line per file and quits.
+// For unattended runs, /app0/dev/playlist.txt ("file seconds [seek-to] [upscaler] [pcm|auto|passthrough]" per
+// line, the upscaler one of UPSCALERS, the last the audio output) plays each file for that long, logs a summary
+// line per file and quits.
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {AppRegistry, View, Text, FocusScope, FileSystem, Video, BackHandler} from '@ps5-react/core';
+import {AppRegistry, View, Text, FocusScope, FileSystem, Video, BackHandler, AudioOutput} from '@ps5-react/core';
 import {useInterfaceSounds} from './sounds.js';
 
 const MEDIA = '/app0/media';
 const UPSCALERS = ['artcnn', 'anime4k-s', 'anime4k-m', 'anime4k-l', 'anime4k-vl', 'anime4k-ul'];
+const AUDIO_OUTPUTS = ['pcm', 'auto', 'passthrough'];
+
+function describeSink() {
+  const began = performance.now();
+  const sink = AudioOutput.capabilities();
+  const ms = (performance.now() - began).toFixed(2);
+  if (!sink.known) return `sink unknown (${ms} ms)`;
+  const formats = sink.formats.map(f => `${f.codec} ${f.channels}ch`).join(', ') || 'no audio formats';
+  return `sink ${sink.name || '?'}: ${formats} | passthrough ${sink.passthrough.join(', ') || 'none'} (${ms} ms)`;
+}
 const VIDEO_FILE = /\.(mp4|m4v|mov|mkv|webm|ts|m2ts|avi|flv|mpg|mpeg|ogv)$/i;
 
 function readSources() {
@@ -90,6 +101,8 @@ function Player({source, onClose}) {
   const [subtitle, setSubtitle] = useState('');
   const [subtitleTrack, setSubtitleTrack] = useState(-1);
   const [upscale, setUpscale] = useState('');
+  const [audioOutput, setAudioOutput] = useState('auto');
+  const sink = useMemo(describeSink, []);
   const rate = useRate(status);
 
   // The status arrives every frame; the overlay renders twice a second.
@@ -127,7 +140,7 @@ function Player({source, onClose}) {
     <FocusScope autoFocus trap onBack={() => { onClose(); return true; }} onAction={onAction}>
       <View className="w-screen h-screen bg-black">
         <Video ref={video} source={source.uri} paused={paused} className="absolute inset-0" subtitleTrack={subtitleTrack}
-          upscale={upscale}
+          upscale={upscale} audioOutput={audioOutput}
           onEnd={() => setPaused(true)} onError={event => setError(event.error)} onSubtitle={setSubtitle} />
         {!!subtitle && (
           <View className="absolute left-0 right-0 bottom-40 items-center">
@@ -155,9 +168,10 @@ function Player({source, onClose}) {
             {status && (
               <Text className="font-inter text-hint text-white">
                 {track ? `audio ${track.codec} ${track.channels}ch ${track.language || ''} `
-                  + `(${status.audioTracks.length} tracks)` : 'no audio'}
+                  + `(${status.audioTracks.length} tracks), ${status.audioPassthrough ? 'passed through' : 'decoded'}` : 'no audio'}
               </Text>
             )}
+            <Text className="font-inter text-hint text-white">{sink}</Text>
             {!!error && <Text className="font-inter text-hint text-red-400">{error}</Text>}
           </View>
         )}
@@ -167,6 +181,8 @@ function Player({source, onClose}) {
           <Button label="+10 s" onPress={() => seekBy(10)} />
           <Button label="Audio" onPress={nextTrack} />
           <Button label={subtitleTrack < 0 ? 'Subtitles off' : `Subtitles ${subtitleTrack}`} onPress={nextSubtitles} />
+          <Button label={`Audio out ${audioOutput}`}
+            onPress={() => setAudioOutput(value => AUDIO_OUTPUTS[(AUDIO_OUTPUTS.indexOf(value) + 1) % AUDIO_OUTPUTS.length])} />
           <Button label={upscale || 'No upscaler'}
             onPress={() => setUpscale(value => ['', ...UPSCALERS][(UPSCALERS.indexOf(value) + 2) % (UPSCALERS.length + 1)])} />
           <Text className="font-inter text-hint text-accent">L1/R1 seek 60 s | Triangle info | Square audio | Circle back</Text>
@@ -180,9 +196,11 @@ function readPlaylist(sources) {
   try {
     return FileSystem.readFile('/app0/dev/playlist.txt').split('\n').map(line => line.trim().split(/\s+/))
       .filter(([name]) => name).map(([name, seconds, ...rest]) => {
-        const upscale = rest.find(word => UPSCALERS.includes(word)) ?? '', seek = rest.find(word => !UPSCALERS.includes(word));
+        const upscale = rest.find(word => UPSCALERS.includes(word)) ?? '';
+        const audioOutput = rest.find(word => AUDIO_OUTPUTS.includes(word)) ?? 'pcm';
+        const seek = rest.find(word => !UPSCALERS.includes(word) && !AUDIO_OUTPUTS.includes(word));
         return {source: sources.find(source => source.label === name) ?? {label: name, uri: `${MEDIA}/${name}`},
-          seconds: Number(seconds) || 10, seek: seek === undefined ? null : Number(seek), upscale};
+          seconds: Number(seconds) || 10, seek: seek === undefined ? null : Number(seek), upscale, audioOutput};
       });
   } catch {
     return null;
@@ -194,6 +212,7 @@ function PlaylistRun({playlist}) {
   const [index, setIndex] = useState(0);
   const video = useRef(null);
   const item = playlist[index];
+  useEffect(() => console.log(`playlist ${describeSink()}`), []);
   useEffect(() => {
     if (!item) {
       console.log('playlist done');
@@ -205,7 +224,8 @@ function PlaylistRun({playlist}) {
       const s = video.current?.getStatus();
       console.log(s ? `playlist ${item.source.label}${item.upscale ? ` (${item.upscale})` : ''}: ${s.state} ${s.decoder} ${s.videoCodec} ${s.width}x${s.height} `
         + `pos=${s.position.toFixed(1)} shown=${s.shownFrames} dropped=${s.droppedFrames} late=${s.lateMs.toFixed(1)}ms `
-        + `clock=${s.audioClock ? 'audio' : 'wall'} audio=${s.audioCodec || '-'} ${s.error}` : `playlist ${item.source.label}: no status`);
+        + `clock=${s.audioClock ? 'audio' : 'wall'} audio=${s.audioCodec || '-'}${s.audioPassthrough ? ' passthrough' : ''} ${s.error}`
+        : `playlist ${item.source.label}: no status`);
       setIndex(i => i + 1);
     }, item.seconds * 1000);
     return () => { clearTimeout(timer); if (seek) clearTimeout(seek); };
@@ -214,7 +234,7 @@ function PlaylistRun({playlist}) {
   return (
     <View className="w-screen h-screen bg-black">
       <Video key={index} ref={video} source={item.source.uri} className="absolute inset-0" upscale={item.upscale}
-        onError={event => console.log(`playlist ${item.source.label}: error ${event.error}`)} />
+        audioOutput={item.audioOutput} onError={event => console.log(`playlist ${item.source.label}: error ${event.error}`)} />
     </View>
   );
 }

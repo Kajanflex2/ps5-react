@@ -28,6 +28,11 @@ namespace video {
 
 enum class State : std::uint8_t { loading, ready, buffering, ended, failed };
 
+// Where the audio track goes. pcm: decoded, mixed down to the mixer's 48 kHz stereo. automatic: AC-3,
+// E-AC-3 and DTS at 48 kHz go undecoded to a sink whose EDID lists them (audio_sink.hpp), the rest is
+// decoded. passthrough: those three go undecoded whatever the EDID says; decoded only if the output refuses.
+enum class AudioOutput : std::uint8_t { pcm, automatic, passthrough };
+
 struct Track {
   int index = 0; // stream index in the file; an added subtitle file's is kExternalSubtitle and up
   std::string language, title, codec;
@@ -52,6 +57,7 @@ struct Status {
   // audio as the clock this is the picture's lag behind the sound.
   double late_ms = 0;
   bool audio_clock = false;
+  bool audio_passthrough = false;  // the track goes to the sink undecoded
   int queued_frames = 0, queued_packets = 0; // decoded frames waiting, video packets waiting
   int starved_updates = 0;                   // frames presented while the next picture was not decoded yet
 };
@@ -59,6 +65,7 @@ struct Status {
 struct Options {
   bool paused = false, muted = false, loop = false;
   bool audio = true;                // decode audio for the mixer (set_audio_output)
+  AudioOutput audio_output = AudioOutput::pcm;
   float volume = 1;
   double start = 0;                 // seconds
   std::vector<std::string> headers; // "Name: value" request headers for http(s)
@@ -87,6 +94,8 @@ public:
   int add_subtitle_file(const std::string& url, const std::string& language, const std::string& title);
   // Whether this player's audio goes to the mixer; one player at a time does.
   void set_audio_output(bool on);
+  // Decoded or passed through; a change reads the track again from the playhead.
+  void set_audio_mode(AudioOutput mode);
 
   // Stops playing audio and returns what the mixer may still read for a grain, to keep alive that long:
   // the player may then be destroyed on another thread.
@@ -135,6 +144,7 @@ private:
   bool opened_ = false, has_video_ = false;
   int audio_index_ = -1;                // the audio stream decoded, -1 for none
   bool decode_audio_ = false;           // set_audio_output
+  AudioOutput audio_mode_ = AudioOutput::pcm;
   std::int64_t demuxed_us_ = 0;         // media time of the newest packet read
   std::int64_t playhead_us_ = 0;        // the clock at the last update, for read-ahead
   std::shared_ptr<AudioRing> filling_;  // the ring the audio thread writes for serial_
@@ -152,7 +162,7 @@ private:
   std::int64_t heard_us_ = 0, heard_at_us_ = 0; // the audio clock's last step, and when it was seen
   std::int64_t first_shown_us_ = 0;
   std::shared_ptr<AudioRing> clock_ring_; // the ring timing the current serial, routed or not
-  bool routed_ = false;
+  bool routed_ = false, routed_bitstream_ = false; // a ring is routed, and to the bitstream output
   bool audio_finished_ = false; // the clock ring ran out before the picture: the wall clock carries on
   std::vector<std::pair<std::shared_ptr<AudioRing>, std::int64_t>> retired_; // freed after the time
   bool audio_output_ = false, playing_ = false, muted_ = false;
