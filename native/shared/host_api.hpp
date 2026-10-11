@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v12) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v13) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -88,15 +88,20 @@
 //   sound.play(name, volume, pan)  ABI v5; boolean; posts an imported WAV to the mixer (volume
 //                                  0..1, pan -1..1); false without audio or while it still plays
 //   sound.setVolume(volume)        master gain 0..1 for every sound
+//   audioOutput.capabilities()     ABI v13; {known, name, formats: [{codec, channels, sampleRates, bitDepths?,
+//                                  maxBitrate?}], passthrough: ['ac3' | 'eac3' | 'dts'], pcmChannels}: what the
+//                                  connected sink takes, from its EDID (PS5: the HDMI sink); known false without one
 //   video.open(source, options)   ABI v10; {id, name}: plays an app path or http(s) URL on its own
-//                                  threads; options: paused, muted, loop, volume, start, audio, headers.
+//                                  threads; options: paused, muted, loop, volume, start, audio, headers,
+//                                  audioOutput (ABI v13: 'pcm' | 'auto' | 'passthrough').
 //                                  `name` is the placeholder image an <Image layer> draws, which the
 //                                  presenter replaces with the video
 //   video.close(id)               stops it and frees it off the render thread
 //   video.setPaused(id, paused) / seek(id, seconds) / setVolume(id, 0..1) / setMuted(id, muted) /
 //   setLoop(id, loop) / setResizeMode(id, 0 contain | 1 cover | 2 stretch) / selectAudioTrack(id, index) /
 //   selectSubtitleTrack(id, index) / setAudioDelay(id, seconds, -2..2: the sound later than the picture) /
-//   setUpscale(id, model: '' for none, 'artcnn', 'anime4k-s' / -m / -l / -vl / -ul; where compute shaders run)
+//   setUpscale(id, model: '' for none, 'artcnn', 'anime4k-s' / -m / -l / -vl / -ul; where compute shaders run) /
+//   setAudioOutput(id, 'pcm' | 'auto' | 'passthrough') ABI v13; read again from the playhead
 //   video.addSubtitle(id, source, language, title) the track index of a text subtitle file (path or URL),
 //                                  loaded off the render thread
 //   video.poll()                   [{id, state, paused, seeking, position, duration, buffered, width,
@@ -104,7 +109,8 @@
 //                                  audioTracks: [{index, language, title, codec, channels}],
 //                                  subtitleTracks: [{index, language, title, codec, external}],
 //                                  subtitleTrack, subtitle (the text showing now),
-//                                  shownFrames, droppedFrames, lateMs, audioClock}]; state 'loading' | 'ready' |
+//                                  shownFrames, droppedFrames, lateMs, audioClock, audioPassthrough (ABI v13: the
+//                                  sink decodes the track)}]; state 'loading' | 'ready' |
 //                                  'buffering' | 'ended' | 'failed'
 //   text.setLanguage(tag)          ABI v6; BCP 47 language for runtime text (Han glyph forms,
 //                                  shaping); defaults to the system language
@@ -119,6 +125,9 @@
 
 namespace hui::audio {
 class Mixer;
+}
+namespace iec61937 {
+enum class Codec : std::uint8_t;
 }
 
 extern "C" {
@@ -209,6 +218,15 @@ void keep_awake(bool enabled);
 // Renders the mixer on an audio thread (PS5: sceAudioOut, desktop: SDL); false leaves the app silent.
 bool start_audio(hui::audio::Mixer& mixer);
 void stop_audio();
+
+// IEC 61937 bitstream output, for the sink to decode (PS5: the HDMI port the console's disc player uses).
+// Opening switches the HDMI audio mode, which blocks for a while: not on the render thread. Its own thread
+// calls `fill` for each grain of `frames` carrier frames (two words each), which writes zeros where it has
+// nothing. False where there is no such output (the desktop preview) or the console refuses it.
+using BitstreamFill = void (*)(std::uint16_t* words, std::size_t frames);
+bool has_bitstream();
+bool open_bitstream(iec61937::Codec codec, BitstreamFill fill);
+void close_bitstream();
 } // namespace host
 
 // ABI v2: synchronous native task submission/polling; I/O runs off-thread.
@@ -237,3 +255,5 @@ JSValue ps5_react_browser_capture_api(JSContext* ctx);
 JSValue ps5_react_lan_api(JSContext* ctx);
 // ABI v10: video playback (video_api.hpp).
 JSValue ps5_react_video_api(JSContext* ctx);
+// ABI v13: the connected sink's audio capabilities (audio_output_api.cpp).
+JSValue ps5_react_audio_output_api(JSContext* ctx);

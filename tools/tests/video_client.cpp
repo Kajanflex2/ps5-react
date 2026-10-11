@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // tools/test_video.py: plays a two-second clip through video::Player in real time, with a stand-in mixer
-// that reads the routed audio ring at 48 kHz, and checks what the presenter would show.
+// that reads the routed audio ring at 48 kHz and a stand-in HDMI bitstream output that reads routed bursts
+// at their carrier's rate, and checks what the presenter would show and what reaches the sink.
+#include "audio_sink.hpp"
+#include "burst_ring.hpp"
+#include "iec61937.hpp"
 #include "video_audio.hpp"
 #include "video_player.hpp"
 #include "audio/stream_ring.hpp"
@@ -11,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -29,6 +34,49 @@ void mixer() {
     std::this_thread::sleep_until(next);
     if (hui::audio::StreamRing* ring = routed.load()) mixed += ring->read(grain, 256);
   }
+}
+
+// The bitstream output: a grain (5.33 ms of carrier) at a time from the routed burst ring, counting the
+// bursts that reach the sink by their preambles. The sink's EDID is `sink`.
+std::vector<std::uint8_t> sink;
+std::atomic<BurstRing*> bursts_routed{nullptr};
+std::atomic<int> carrier{0}; // the open output's rate, 0 while closed
+std::atomic<bool> bitstream_muted{false}, refuse_bitstream{false};
+std::atomic<int> opens{0}, closes{0};
+std::atomic<std::uint64_t> carrier_read{0}, bursts_heard{0};
+std::atomic<std::uint16_t> burst_type{0};
+
+void bitstream_output() {
+  std::vector<std::uint16_t> grain(1024 * 2);
+  auto next = std::chrono::steady_clock::now();
+  while (mixing) {
+    next += std::chrono::microseconds(5333);
+    std::this_thread::sleep_until(next);
+    const int rate = carrier.load();
+    BurstRing* ring = bursts_routed.load();
+    if (!rate || !ring) continue;
+    const std::size_t frames = rate > 48000 ? 1024 : 256;
+    const std::size_t read = ring->read(grain.data(), frames);
+    carrier_read += read;
+    if (bitstream_muted) continue;
+    for (std::size_t i = 0; i + 1 < read; ++i)
+      if (grain[i * 2] == 0xf872 && grain[i * 2 + 1] == 0x4e1f) {
+        ++bursts_heard;
+        burst_type = grain[i * 2 + 2];
+      }
+  }
+}
+
+// A receiver's EDID listing AC-3 and E-AC-3, or one listing only PCM.
+std::vector<std::uint8_t> receiver_edid(bool dolby) {
+  std::vector<std::uint8_t> edid(256);
+  const std::uint8_t header[8] = {0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0};
+  std::copy(header, header + 8, edid.begin());
+  edid[126] = 1;
+  const std::uint8_t cta[] = {0x02, 0x03, 14, 0x40, (1 << 5) | 9, 0x0f, 0x07, 0x07, 0x15, 0x07, 0x50, 0x57, 0x06, 0x01};
+  std::copy(cta, cta + (dolby ? sizeof cta : 8), edid.begin() + 128);
+  if (!dolby) edid[128 + 4] = (1 << 5) | 3, edid[128 + 2] = 8;
+  return edid;
 }
 
 std::int64_t now_us() {
@@ -108,14 +156,33 @@ namespace video_audio {
 bool start() { return true; }
 void route(hui::audio::StreamRing* ring) { routed = ring; }
 void set_gain(float) {}
+bool open_bitstream(iec61937::Codec codec, const void*) {
+  if (refuse_bitstream) return false;
+  ++opens;
+  carrier = iec61937::carrier_rate(codec);
+  return true;
+}
+void close_bitstream(const void*) {
+  ++closes;
+  carrier = 0;
+}
+void route_bitstream(BurstRing* ring) { bursts_routed = ring; }
+void set_bitstream_muted(bool muted) { bitstream_muted = muted; }
 } // namespace video_audio
 
+namespace host {
+bool sink_edid(std::vector<std::uint8_t>& edid) {
+  edid = sink;
+  return !sink.empty();
+}
+} // namespace host
+
 int main(int argc, char** argv) {
-  if (argc < 5) {
-    std::fprintf(stderr, "usage: %s clip subtitled-clip subtitles.srt short-audio-clip\n", argv[0]);
+  if (argc < 6) {
+    std::fprintf(stderr, "usage: %s clip subtitled-clip subtitles.srt short-audio-clip ac3-eac3-clip\n", argv[0]);
     return 2;
   }
-  std::thread audio(mixer);
+  std::thread audio(mixer), hdmi(bitstream_output);
   std::vector<std::shared_ptr<void>> kept; // rings the mixer may still read
   {
     video::Player player(argv[1], {});
@@ -192,6 +259,97 @@ int main(int argc, char** argv) {
     for (auto& ring : player.detach_audio()) kept.push_back(ring);
   }
   {
+    // Passthrough, to a receiver that lists AC-3 and E-AC-3: its AC-3 track reaches the sink as bursts, one
+    // per 32 ms frame, and keeps the picture's time as decoded audio does.
+    sink = receiver_edid(true);
+    video::Options options;
+    options.audio_output = video::AudioOutput::automatic;
+    video::Player player(argv[5], options);
+    const std::uint64_t pcm_before = mixed;
+    const Run run = present(player, 3500);
+    video::Status status = player.status();
+    check(status.audio_passthrough && status.audio_codec == "ac3" && opens == 1 && burst_type == 0x0001,
+          "auto passes AC-3 through to a sink that lists it (" + std::to_string(opens) + " opens)");
+    check(mixed == pcm_before, "and nothing of it reaches the mixer");
+    check(bursts_heard >= 60 && bursts_heard <= 63, "every AC-3 frame reaches the sink as a burst: " +
+          std::to_string(bursts_heard) + " of 63");
+    check(status.state == video::State::ended && run.ordered && run.changes >= 46,
+          "plays to the end in order: " + std::to_string(run.changes) + " pictures");
+    check(status.audio_clock || carrier_read > 0, "the bursts read are the clock");
+    check(std::fabs(status.late_ms) < 20, "pictures keep time with the bitstream: " + std::to_string(status.late_ms) + " ms late");
+
+    player.seek(1.0);
+    const std::uint64_t heard = bursts_heard;
+    const Run sought = present(player, 3000);
+    check(sought.first_us >= 1000000 && sought.first_us < 1040000 && sought.changes >= 22,
+          "a seek with passthrough shows the frame at 1 s first and plays on: " + std::to_string(sought.first_us) + " us, " +
+          std::to_string(sought.changes) + " pictures");
+    check(bursts_heard - heard >= 29 && bursts_heard - heard <= 33 && opens == 1,
+          "and sends the second's bursts on the output already open: " + std::to_string(bursts_heard - heard));
+
+    player.seek(0);
+    present(player, 600, false);
+    player.set_paused(true, now_us());
+    const double held = player.status().position;
+    const std::uint64_t read = carrier_read;
+    present(player, 400, false);
+    check(std::fabs(player.status().position - held) < 0.02 && carrier_read - read < 2048,
+          "a pause stops the bursts and holds the position at " + std::to_string(held) + " s");
+    player.set_paused(false, now_us());
+    player.set_muted(true);
+    const double unmuted = player.status().position;
+    const std::uint64_t muted_heard = bursts_heard;
+    present(player, 400, false);
+    check(bitstream_muted && bursts_heard == muted_heard && player.status().position > unmuted + 0.3,
+          "muted, zeros reach the sink and the clock goes on");
+    player.set_muted(false);
+
+    // The E-AC-3 track: the output reopens for it, on a 192 kHz carrier.
+    player.select_audio_track(2);
+    const Run eac3 = present(player, 3500);
+    status = player.status();
+    check(status.audio_passthrough && status.audio_codec == "eac3" && carrier == 192000 && burst_type == 0x0015,
+          "an E-AC-3 track reopens the output on a 192 kHz carrier");
+    check(status.state == video::State::ended && std::fabs(status.late_ms) < 20 && eac3.ordered,
+          "and keeps time on it: " + std::to_string(status.late_ms) + " ms late");
+
+    // Back to decoding, mid-play: the output closes and the mixer plays from the playhead.
+    player.seek(0);
+    present(player, 400, false);
+    const int closed = closes;
+    const double switched = player.status().position;
+    player.set_audio_mode(video::AudioOutput::pcm);
+    present(player, 600, false);
+    status = player.status();
+    check(!status.audio_passthrough && closes == closed + 1 && mixed > pcm_before && status.audio_clock &&
+          status.position > switched + 0.3,
+          "audioOutput 'pcm' closes the output and decodes to the mixer from the playhead (" + std::to_string(closes - closed) +
+          " closes, at " + std::to_string(status.position) + " s)");
+    for (auto& ring : player.detach_audio()) kept.push_back(ring);
+  }
+  {
+    // A sink that lists no Dolby audio decodes it in auto; passthrough forces it; a refused output decodes.
+    sink = receiver_edid(false);
+    video::Options options;
+    options.audio_output = video::AudioOutput::automatic;
+    video::Player decoded(argv[5], options);
+    present(decoded, 600, false);
+    check(!decoded.status().audio_passthrough, "auto decodes AC-3 for a sink that does not list it");
+    for (auto& ring : decoded.detach_audio()) kept.push_back(ring);
+    options.audio_output = video::AudioOutput::passthrough;
+    video::Player forced(argv[5], options);
+    present(forced, 600, false);
+    check(forced.status().audio_passthrough, "passthrough sends it whatever the EDID says");
+    for (auto& ring : forced.detach_audio()) kept.push_back(ring);
+    refuse_bitstream = true;
+    const std::uint64_t pcm_before = mixed;
+    video::Player refused(argv[5], options);
+    present(refused, 600, false);
+    check(!refused.status().audio_passthrough && mixed > pcm_before && refused.status().audio_clock,
+          "an output the console refuses leaves the track decoded");
+    for (auto& ring : refused.detach_audio()) kept.push_back(ring);
+  }
+  {
     video::Player missing("/nonexistent/clip.mp4", {});
     present(missing, 300, false);
     const video::Status status = missing.status();
@@ -200,6 +358,7 @@ int main(int argc, char** argv) {
   }
   mixing = false;
   audio.join();
+  hdmi.join();
   std::printf("%s\n", failures ? "FAILED" : "PASS");
   return failures ? 1 : 0;
 }
