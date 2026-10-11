@@ -20,6 +20,8 @@ extern "C" {
 #include <string>
 #include <vector>
 
+std::atomic<const char*> host::current_call{nullptr};
+
 namespace {
 bool exit_requested = false;
 GamepadState gamepad;
@@ -416,8 +418,8 @@ struct Function {
 // Every native call goes through `traced`, which reports its first use to host::trace:
 // a native fault on the console then leaves the name of the call that caused it.
 struct Traced {
-  const char* space;
   const Function* function;
+  char name[64];
   bool reported;
 };
 Traced g_traced[64];
@@ -427,10 +429,9 @@ JSValue traced(JSContext* ctx, JSValueConst self, int argc, JSValueConst* argv, 
   Traced& entry = g_traced[index];
   if (!entry.reported) {
     entry.reported = true;
-    char call[64];
-    std::snprintf(call, sizeof call, "%s%s%s", entry.space, *entry.space ? "." : "", entry.function->name);
-    host::trace(call);
+    host::trace(entry.name);
   }
+  host::CallScope scope(entry.name);
   return entry.function->call(ctx, self, argc, argv);
 }
 
@@ -440,7 +441,11 @@ JSValue namespace_object(JSContext* ctx, const char* space, const Function (&fun
   for (const Function& function : functions) {
     int index = 0;
     while (index < g_traced_count && g_traced[index].function != &function) ++index;
-    if (index == g_traced_count) g_traced[g_traced_count++] = {space, &function, false};
+    if (index == g_traced_count) {
+      Traced& entry = g_traced[g_traced_count++];
+      entry.function = &function;
+      std::snprintf(entry.name, sizeof entry.name, "%s%s%s", space, *space ? "." : "", function.name);
+    }
     JS_SetPropertyStr(ctx, object, function.name,
                       JS_NewCFunctionData(ctx, traced, function.length, index, 0, nullptr));
   }

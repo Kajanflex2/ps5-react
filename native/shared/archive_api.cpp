@@ -68,6 +68,7 @@ JSValue inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!ok) return JS_ThrowTypeError(ctx,"archives.inspect: source path is not allowed");
     sources.push_back(std::move(file));
   }
+  const host::CallScope scope("archives.inspect");
   const auto inspection = archives::inspect(sources);
   JSValue out = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx,out,"kind",JS_NewString(ctx,inspection.kind.c_str()));
