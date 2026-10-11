@@ -30,6 +30,7 @@ struct Entry {
   std::string name; // the placeholder image the <Video> element draws, and the presenter replaces
   GlVideo::Fit fit = GlVideo::Fit::contain;
   int upscale = upscalers::kNone;
+  GlVideo::Compare compare;
   bool audio = true;
 };
 
@@ -250,6 +251,27 @@ JSValue set_upscale(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) 
   return JS_UNDEFINED;
 }
 
+// setCompare(id, model, split): right of `split` (0..1 across the picture) the picture goes through
+// `model` ('' for none) instead; a null model ends the comparison.
+JSValue set_compare(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+  Entry* entry = argc >= 3 ? entry_arg(ctx, argv[0], "video.setCompare") : nullptr;
+  if (!entry) return argc >= 3 ? JS_EXCEPTION : JS_ThrowTypeError(ctx, "video.setCompare: expected id, model and split");
+  if (JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
+    entry->compare = {};
+    return JS_UNDEFINED;
+  }
+  double split = 0.5;
+  if (JS_ToFloat64(ctx, &split, argv[2])) return JS_EXCEPTION;
+  const char* name = JS_ToCString(ctx, argv[1]);
+  if (!name) return JS_EXCEPTION;
+  const int model = *name ? upscalers::find(name) : upscalers::kNone;
+  const bool known = !*name || model != upscalers::kNone;
+  JS_FreeCString(ctx, name);
+  if (!known) return JS_ThrowRangeError(ctx, "video.setCompare: null, '' for none, or %s", upscalers::names().c_str());
+  entry->compare = {true, model, float(std::clamp(split, 0.0, 1.0))};
+  return JS_UNDEFINED;
+}
+
 JSValue set_audio_output(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   Entry* entry = argc >= 2 ? entry_arg(ctx, argv[0], "video.setAudioOutput") : nullptr;
   if (!entry) return argc >= 2 ? JS_EXCEPTION : JS_ThrowTypeError(ctx, "video.setAudioOutput: expected id and mode");
@@ -381,6 +403,7 @@ bool find(const char* image_name, Layer& layer) {
     layer.frame = entry.player->frame();
     layer.fit = entry.fit;
     layer.upscale = entry.upscale;
+    layer.compare = entry.compare;
     return true;
   }
   return false;
@@ -488,7 +511,7 @@ JSValue ps5_react_video_api(JSContext* ctx) {
     {"open", open, 2}, {"close", close, 1}, {"setPaused", set_paused, 2}, {"seek", seek, 2},
     {"setVolume", set_volume, 2}, {"setMuted", set_muted, 2}, {"setLoop", set_loop, 2},
     {"setAudioDelay", set_audio_delay, 2}, {"setAudioOutput", set_audio_output, 2},
-    {"setResizeMode", set_fit, 2}, {"setUpscale", set_upscale, 2}, {"selectAudioTrack", select_audio, 2},
+    {"setResizeMode", set_fit, 2}, {"setUpscale", set_upscale, 2}, {"setCompare", set_compare, 3}, {"selectAudioTrack", select_audio, 2},
     {"selectSubtitleTrack", select_subtitle, 2}, {"addSubtitle", add_subtitle, 4}, {"poll", poll, 0},
   };
   for (const auto& function : functions)
