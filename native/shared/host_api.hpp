@@ -81,6 +81,7 @@
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -135,6 +136,13 @@ bool read_dir(const char* real_path, void (*visit)(const char* name, void* user)
 bool disk_usage(const char* real_path, double& total, double& free);
 // Records the first use of each native call (PS5: kernel log), to locate native faults.
 void trace(const char* call);
+// The native call running on the render thread, or nullptr: the stall watchdog names it.
+extern std::atomic<const char*> current_call;
+struct CallScope {
+  const char* outer;
+  explicit CallScope(const char* name) : outer(current_call.exchange(name)) {}
+  ~CallScope() { current_call = outer; }
+};
 // Opens the app again once it has closed: PS5 sends relauncher.elf to the payload loader, the desktop
 // preview runs itself again. False with a reason in `error` (at most `size` bytes) when it cannot.
 bool arrange_relaunch(char* error, std::size_t size);
