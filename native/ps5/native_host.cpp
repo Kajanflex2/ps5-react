@@ -393,6 +393,7 @@ bool run_proof() {
     std::uint64_t frames = 0;
     InputScript script;
     load_input_script(script);
+    VirtualPad virtual_pad;
     LiveCommands commands;
     commands.start();
     // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
@@ -459,7 +460,6 @@ bool run_proof() {
       }
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
       host_platform_tick(now);
-      ps5_react_set_gamepad(gamepad_state(input));
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
       for (const auto& [button, action] : kExtraActions) {
         if (ok && input.is_pressed(button)) ok = dispatch(action_name(action));
@@ -468,13 +468,24 @@ bool run_proof() {
       if (const char* action = ok ? script.next(static_cast<std::uint64_t>(now / 1000)) : nullptr) {
         async_log::write("[PS5-REACT] script: %s", action);
         if (!std::strcmp(action, "quit")) break;
-        if (!std::strncmp(action, "shot:", 5)) {
+        if (VirtualPad::is_step(action)) {
+          char error[160];
+          if (!virtual_pad.apply(action, static_cast<std::uint64_t>(now / 1000), error, sizeof error))
+            async_log::write("[PS5-REACT] script: %s", error);
+        } else if (!std::strncmp(action, "shot:", 5)) {
           const std::string path = dev_path((std::string(action + 5) + ".bmp").c_str());
           async_log::write("[PS5-REACT] shot %s: %s", path.c_str(), save_screenshot(path.c_str()) ? "saved" : std::strerror(errno));
         } else {
           ok = dispatch(action);
         }
       }
+      GamepadState state = gamepad_state(input);
+      // A scripted hold presses like the controller: the button's action, once.
+      for (std::uint32_t pressed = virtual_pad.merge(state, static_cast<std::uint64_t>(now / 1000)), i = 0; ok && pressed;
+           pressed >>= 1, ++i) {
+        if (const char* held = pressed & 1 ? VirtualPad::action(i, PS5_REACT_OPTIONS_TO_APP) : nullptr) ok = dispatch(held);
+      }
+      ps5_react_set_gamepad(state);
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_JS);

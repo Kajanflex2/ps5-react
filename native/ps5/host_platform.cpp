@@ -348,8 +348,16 @@ void vibrate(float strength, float seconds) {
   else active_pad->rumble(strength, seconds);
 }
 
-void set_trigger_resistance(unsigned mask, int position, int strength) {
-  if (active_pad) active_pad->set_trigger_feedback(mask, position, strength);
+void set_trigger_effect(unsigned mask, int mode, const std::uint8_t* params, std::size_t count) {
+  if (!active_pad) return;
+  const int result = active_pad->set_trigger_effect(mask, static_cast<unsigned>(mode), params, count);
+  // Each mode's first answer, and any change of answer, as hardware evidence without a line per call.
+  static int reported[4] = {1, 1, 1, 1};
+  if (reported[mode] == result) return;
+  reported[mode] = result;
+  async_log::write("[PS5-REACT] pad trigger effect mask=%u mode=%d [%d %d %d] -> 0x%08x", mask, mode,
+                   count > 0 ? params[0] : 0, count > 1 ? params[1] : 0, count > 2 ? params[2] : 0,
+                   static_cast<unsigned>(result));
 }
 
 namespace {

@@ -4,14 +4,61 @@
 #include "input_script.hpp"
 
 #include "actions.hpp"
+#include "host_api.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <string>
+#include <string_view>
 
 namespace {
 constexpr std::uint32_t kRepeatMs = 110; // The desktop host's held-key repeat interval.
+constexpr std::size_t kL2 = 10, kR2 = 11;
+static_assert(std::size(kButtonNames) == 16 && std::string_view(kButtonNames[kL2]) == "l2" &&
+              std::string_view(kButtonNames[kR2]) == "r2");
+
+struct PadStep { std::size_t button; float value; long ms; };
+
+// "hold:BUTTON[:MS]", "release:BUTTON", "trigger:l2|r2:VALUE[:MS]".
+bool parse_pad_step(const std::string& step, PadStep& out, char* error, std::size_t size) {
+  std::vector<std::string> parts;
+  for (std::size_t start = 0;;) {
+    const std::size_t colon = std::min(step.find(':', start), step.size());
+    parts.push_back(step.substr(start, colon - start));
+    if (colon == step.size()) break;
+    start = colon + 1;
+  }
+  const std::size_t count = parts.size();
+  const std::string& verb = parts[0];
+  const bool trigger = verb == "trigger";
+  const std::size_t most = trigger ? 4 : verb == "hold" ? 3 : 2;
+  const auto fail = [&](const char* reason) {
+    std::snprintf(error, size, "bad %s '%s' (%s)", verb.c_str(), step.c_str(), reason);
+    return false;
+  };
+  if (count < 2 || count > most || (trigger && count < 3))
+    return fail(trigger ? "trigger:l2|r2:VALUE[:MS]" : verb == "hold" ? "hold:BUTTON[:MS]" : "release:BUTTON");
+  out = {std::size(kButtonNames), 1, 0};
+  for (std::size_t i = 0; i < std::size(kButtonNames); ++i)
+    if (parts[1] == kButtonNames[i]) out.button = i;
+  if (out.button == std::size(kButtonNames) || (trigger && out.button != kL2 && out.button != kR2))
+    return fail(trigger ? "l2 or r2" : "a button: up, down, left, right, cross, circle, triangle, square, "
+                                       "l1, r1, l2, r2, l3, r3, options, touchpad");
+  char* rest = nullptr;
+  if (trigger) {
+    out.value = std::strtof(parts[2].c_str(), &rest);
+    if (parts[2].empty() || *rest || !(out.value >= 0 && out.value <= 1)) return fail("VALUE 0..1");
+  }
+  if (verb == "release") out.value = 0;
+  if (const std::size_t at = trigger ? 3 : 2; count > at) {
+    const std::string& ms = parts[at];
+    out.ms = std::strtol(ms.c_str(), &rest, 10);
+    if (ms.empty() || *rest || out.ms < 1) return fail("MS a positive number of milliseconds");
+  }
+  return true;
+}
 } // namespace
 
 bool InputScript::parse(const char* text, char* error, std::size_t size) {
@@ -32,6 +79,11 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
         return false;
       }
       steps_.push_back({"", static_cast<std::uint32_t>(ms)});
+      continue;
+    }
+    if (VirtualPad::is_step(token)) {
+      if (!VirtualPad::check(token, error, size)) return false;
+      steps_.push_back({token, 0});
       continue;
     }
     if (token.rfind("shot:", 0) == 0) {
@@ -59,7 +111,8 @@ bool InputScript::parse(const char* text, char* error, std::size_t size) {
     if (!action) {
       std::string known;
       for (const char* name : kActionNames) known += std::string(name) + ", ";
-      std::snprintf(error, size, "unknown action '%s' (use %squit, wait:MS, shot:NAME)", token.c_str(), known.c_str());
+      std::snprintf(error, size, "unknown action '%s' (use %squit, wait:MS, shot:NAME, hold:, release:, trigger:)",
+                    token.c_str(), known.c_str());
       return false;
     }
     for (long i = 0; i < count; ++i) {
@@ -81,4 +134,47 @@ const char* InputScript::next(std::uint64_t now_ms) {
     return step.action.c_str();
   }
   return nullptr;
+}
+
+bool VirtualPad::is_step(const std::string& step) {
+  return step.starts_with("hold:") || step.starts_with("release:") || step.starts_with("trigger:");
+}
+
+bool VirtualPad::check(const std::string& step, char* error, std::size_t size) {
+  PadStep parsed;
+  return parse_pad_step(step, parsed, error, size);
+}
+
+bool VirtualPad::apply(const std::string& step, std::uint64_t now_ms, char* error, std::size_t size) {
+  PadStep parsed;
+  if (!parse_pad_step(step, parsed, error, size)) return false;
+  holds_[parsed.button] = {parsed.value, parsed.ms ? now_ms + static_cast<std::uint64_t>(parsed.ms) : 0};
+  return true;
+}
+
+std::uint32_t VirtualPad::merge(GamepadState& state, std::uint64_t now_ms) {
+  std::uint32_t down = 0;
+  for (std::size_t i = 0; i < std::size(holds_); ++i) {
+    Hold& hold = holds_[i];
+    if (hold.until && now_ms >= hold.until) hold = {};
+    if (hold.value <= 0) continue;
+    if (i == kL2) state.l2 = std::max(state.l2, hold.value);
+    if (i == kR2) state.r2 = std::max(state.r2, hold.value);
+    if ((i != kL2 && i != kR2) || hold.value > 0.5f) down |= 1u << i;
+  }
+  state.buttons |= down;
+  const std::uint32_t pressed = down & ~down_;
+  down_ = down;
+  return pressed;
+}
+
+const char* VirtualPad::action(std::size_t index, bool options_to_app) {
+  // Indexed like kButtonNames; nullptr for buttons without an action.
+  constexpr const char* kActions[] = {
+    "up", "down", "left", "right", "confirm", "back", "triangle", "square", "l1", "r1", "l2", "r2",
+    nullptr, nullptr, "options", nullptr,
+  };
+  static_assert(std::size(kActions) == std::size(kButtonNames));
+  if (index >= std::size(kActions) || (index == 14 && !options_to_app)) return nullptr;
+  return kActions[index];
 }

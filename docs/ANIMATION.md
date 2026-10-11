@@ -453,7 +453,11 @@ separated by commas or whitespace: an action (`up`, `down`, `left`, `right`, `co
 `l1`, `r1`, `l2`, `r2`, `triangle`, `square`) takes one frame, `action*N` repeats it at the held-key repeat interval
 (110 ms), `wait:MS` pauses for wall-clock milliseconds, `quit` closes the
 preview, and `shot:NAME` saves the frame on screen (letters, digits, `_`
-and `-`; see [Screenshots](#screenshots)). `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
+and `-`; see [Screenshots](#screenshots)). `hold:BUTTON[:MS]` holds a `GamepadState` button
+(`touchpad`, `l3`, `cross`, ...) for MS or until `release:BUTTON`, and `trigger:l2|r2:VALUE[:MS]`
+sets a trigger's travel (0–1; past half it is pressed, 0 lets go). They return at once, so a
+hold reads `trigger:r2:1,wait:800,trigger:r2:0`; a button with an action (Cross: `confirm`,
+L2 past half travel: `l2`) dispatches it as it goes down, once. `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
 action is echoed as a `script:` line, so the log reads as a timeline. Run the
 preview binary directly, with the bundle of the layout it was built for, to set them:
 

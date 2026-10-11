@@ -71,9 +71,29 @@ std::uint32_t perf_clock() { return static_cast<std::uint32_t>(now_us()); }
 constexpr std::pair<SDL_Keycode, HostAction> kKeyActions[] = {
   {SDLK_UP, HostAction::up}, {SDLK_DOWN, HostAction::down}, {SDLK_LEFT, HostAction::left},
   {SDLK_RIGHT, HostAction::right}, {SDLK_RETURN, HostAction::confirm}, {SDLK_SPACE, HostAction::confirm},
-  {SDLK_BACKSPACE, HostAction::back}, {SDLK_q, HostAction::l1}, {SDLK_e, HostAction::r1}, {SDLK_z, HostAction::l2},
-  {SDLK_c, HostAction::r2}, {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square},
+  {SDLK_BACKSPACE, HostAction::back}, {SDLK_q, HostAction::l1}, {SDLK_e, HostAction::r1},
+  {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square},
 };
+// The keys' GamepadState buttons (kButtonNames indexes). Z and C are L2 and R2: full travel, or a light
+// press (kLightTravel, short of the half-travel press) while Shift is down. P is the touchpad.
+constexpr std::pair<SDL_Scancode, int> kKeyButtons[] = {
+  {SDL_SCANCODE_UP, 0}, {SDL_SCANCODE_DOWN, 1}, {SDL_SCANCODE_LEFT, 2}, {SDL_SCANCODE_RIGHT, 3},
+  {SDL_SCANCODE_RETURN, 4}, {SDL_SCANCODE_SPACE, 4}, {SDL_SCANCODE_BACKSPACE, 5}, {SDL_SCANCODE_T, 6},
+  {SDL_SCANCODE_F, 7}, {SDL_SCANCODE_Q, 8}, {SDL_SCANCODE_E, 9}, {SDL_SCANCODE_ESCAPE, 14}, {SDL_SCANCODE_P, 15},
+};
+constexpr float kLightTravel = 0.4f;
+
+float key_travel(SDL_Scancode key) {
+  if (!SDL_GetKeyboardState(nullptr)[key]) return 0;
+  return SDL_GetModState() & KMOD_SHIFT ? kLightTravel : 1;
+}
+
+// Triggers are analog: an action on crossing half travel, re-armed below a quarter.
+bool crossed(bool& down, float travel) {
+  if (!down && travel > 0.5f) return down = true;
+  if (down && travel < 0.25f) down = false;
+  return false;
+}
 constexpr std::pair<SDL_GameControllerButton, HostAction> kButtonActions[] = {
   {SDL_CONTROLLER_BUTTON_DPAD_UP, HostAction::up}, {SDL_CONTROLLER_BUTTON_DPAD_DOWN, HostAction::down},
   {SDL_CONTROLLER_BUTTON_DPAD_LEFT, HostAction::left}, {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, HostAction::right},
@@ -114,11 +134,12 @@ GamepadState read_gamepad(SDL_GameController* controller) {
     if (state.r2 > 0.5f) state.buttons |= 1u << 11;
   }
   const Uint8* keys = SDL_GetKeyboardState(nullptr);
-  constexpr SDL_Scancode keyboard[] = {
-    SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE,
-  };
-  for (std::uint32_t i = 0; i < std::size(keyboard); ++i)
-    if (keys[keyboard[i]]) state.buttons |= 1u << i;
+  for (const auto& [key, button] : kKeyButtons)
+    if (keys[key]) state.buttons |= 1u << button;
+  state.l2 = std::max(state.l2, key_travel(SDL_SCANCODE_Z));
+  state.r2 = std::max(state.r2, key_travel(SDL_SCANCODE_C));
+  if (state.l2 > 0.5f) state.buttons |= 1u << 10;
+  if (state.r2 > 0.5f) state.buttons |= 1u << 11;
   return state;
 }
 
@@ -150,7 +171,8 @@ struct Host {
   SDL_GameControllerButton held_button = SDL_CONTROLLER_BUTTON_INVALID;
   GcScheduler gc_scheduler{now_us};
   JsProfiler profiler{now_us};
-  bool l2_down = false, r2_down = false;
+  bool l2_down = false, r2_down = false, key_l2_down = false, key_r2_down = false;
+  VirtualPad virtual_pad;
 
   ~Host() {
     ps5_react_stop_images();
@@ -317,6 +339,11 @@ struct Host {
                                        [&](const char* name) { return arg == name; });
         if (known && !dispatch(arg.c_str())) return false;
         Control::reply(client, known ? "ok" : "unknown action: " + arg);
+      } else if (verb == "hold" || verb == "release" || verb == "trigger") {
+        std::string step = line;
+        std::replace(step.begin(), step.end(), ' ', ':');
+        char error[160];
+        Control::reply(client, virtual_pad.apply(step, SDL_GetTicks64(), error, sizeof error) ? "ok" : std::string(error));
       } else if (verb == "shot") {
         // `shot <path> full` keeps the framebuffer's full resolution, for images meant to be shown.
         const bool full = arg.size() > 5 && arg.ends_with(" full");
@@ -346,7 +373,10 @@ struct Host {
     if (!action) return true;
     if (log_frames) std::printf("[PS5-REACT] script: %s\n", action);
     if (!std::strcmp(action, "quit")) running = false;
-    else if (!std::strncmp(action, "shot:", 5)) {
+    else if (VirtualPad::is_step(action)) {
+      char error[160];
+      if (!virtual_pad.apply(action, SDL_GetTicks64(), error, sizeof error)) std::fprintf(stderr, "script: %s\n", error);
+    } else if (!std::strncmp(action, "shot:", 5)) {
       // The preview keeps shots in the sandbox's temporary folder rather than the app's sources.
       char path[PATH_MAX];
       const std::string name = std::string("/temp0/") + (action + 5) + ".bmp";
@@ -387,10 +417,8 @@ struct Host {
         }
         if (PS5_REACT_OPTIONS_TO_APP && button == SDL_CONTROLLER_BUTTON_START) action = action_name(HostAction::options);
       } else if (event.type == SDL_CONTROLLERAXISMOTION) {
-        // Triggers are analog: an action on crossing half travel, re-armed below a quarter.
         const auto trigger = [&](bool& down, const char* name) {
-          if (!down && event.caxis.value > 16384) { down = true; action = name; }
-          else if (down && event.caxis.value < 8192) down = false;
+          if (crossed(down, event.caxis.value / 32767.0f)) action = name;
         };
         if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) trigger(l2_down, action_name(HostAction::l2));
         else if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) trigger(r2_down, action_name(HostAction::r2));
@@ -411,7 +439,15 @@ struct Host {
       }
     }
     if (!running) return true;
-    ps5_react_set_gamepad(read_gamepad(controller));
+    if (crossed(key_l2_down, key_travel(SDL_SCANCODE_Z)) && !dispatch(action_name(HostAction::l2))) return false;
+    if (crossed(key_r2_down, key_travel(SDL_SCANCODE_C)) && !dispatch(action_name(HostAction::r2))) return false;
+    GamepadState state = read_gamepad(controller);
+    // What a tool holds presses like the controller: the buttons' actions, once (directions do not repeat).
+    for (std::uint32_t pressed = virtual_pad.merge(state, SDL_GetTicks64()), i = 0; pressed; pressed >>= 1, ++i) {
+      const char* held = pressed & 1 ? VirtualPad::action(i, PS5_REACT_OPTIONS_TO_APP) : nullptr;
+      if (held && !dispatch(held)) return false;
+    }
+    ps5_react_set_gamepad(state);
     stats.lap(FrameStats::input, now_us());
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_runtime_pump();

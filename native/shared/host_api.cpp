@@ -364,14 +364,35 @@ JSValue pad_reset_light_bar(JSContext*, JSValueConst, int, JSValueConst*) {
   return JS_UNDEFINED;
 }
 
-JSValue pad_set_trigger_resistance(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
-  std::int32_t mask = 0, position = 0, strength = 0;
-  if (JS_ToInt32(ctx, &mask, argv[0]) || JS_ToInt32(ctx, &position, argv[1]) || JS_ToInt32(ctx, &strength, argv[2]))
+JSValue pad_set_trigger_effect(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  std::int32_t mask = 0, mode = 0, a = 0, b = 0, c = 0;
+  if (JS_ToInt32(ctx, &mask, argv[0]) || JS_ToInt32(ctx, &mode, argv[1]))
     return JS_EXCEPTION;
-  if (mask < 1 || mask > 3 || position < 0 || position > 9 || strength < 0 || strength > 8)
-    return JS_ThrowRangeError(ctx, "pad.setTriggerResistance: mask 1-3, position 0-9, strength 0-8; got %d, %d, %d",
-                              mask, position, strength);
-  host::set_trigger_resistance(static_cast<unsigned>(mask), position, strength);
+  if (mask < 1 || mask > 3) return JS_ThrowRangeError(ctx, "pad.setTriggerEffect: mask 1-3; got %d", mask);
+  // Off takes no parameters; the other modes take two or three bytes.
+  const int count = mode == 0 ? 0 : mode == 1 ? 2 : 3;
+  if (count && (JS_ToInt32(ctx, &a, argv[2]) || JS_ToInt32(ctx, &b, argv[3]) || (count == 3 && JS_ToInt32(ctx, &c, argv[4]))))
+    return JS_EXCEPTION;
+  switch (mode) {
+    case 0: break;
+    case 1:
+      if (a < 0 || a > 9 || b < 1 || b > 8)
+        return JS_ThrowRangeError(ctx, "pad.setTriggerEffect: feedback position 0-9, strength 1-8; got %d, %d", a, b);
+      break;
+    case 2:
+      if (a < 2 || a > 7 || b <= a || b > 8 || c < 1 || c > 8)
+        return JS_ThrowRangeError(ctx, "pad.setTriggerEffect: weapon start 2-7, end start+1-8, strength 1-8; got %d, %d, %d",
+                                  a, b, c);
+      break;
+    case 3:
+      if (a < 0 || a > 9 || b < 1 || b > 8 || c < 1 || c > 255)
+        return JS_ThrowRangeError(ctx, "pad.setTriggerEffect: vibration position 0-9, amplitude 1-8, frequency 1-255; got %d, %d, %d",
+                                  a, b, c);
+      break;
+    default: return JS_ThrowRangeError(ctx, "pad.setTriggerEffect: mode 0 off, 1 feedback, 2 weapon or 3 vibration; got %d", mode);
+  }
+  const std::uint8_t params[] = {static_cast<std::uint8_t>(a), static_cast<std::uint8_t>(b), static_cast<std::uint8_t>(c)};
+  host::set_trigger_effect(static_cast<unsigned>(mask), mode, params, static_cast<std::size_t>(count));
   return JS_UNDEFINED;
 }
 
@@ -487,7 +508,7 @@ constexpr Function kDevice[] = {{"info", device_info, 0}};
 constexpr Function kUsers[] = {{"foreground", users_foreground, 0}, {"loggedIn", users_logged_in, 0}};
 constexpr Function kPad[] = {
   {"setLightBar", pad_set_light_bar, 3}, {"resetLightBar", pad_reset_light_bar, 0},
-  {"vibrate", pad_vibrate, 2}, {"setTriggerResistance", pad_set_trigger_resistance, 3},
+  {"vibrate", pad_vibrate, 2}, {"setTriggerEffect", pad_set_trigger_effect, 5},
   {"state", pad_state, 0},
 };
 constexpr Function kPower[] = {{"keepAwake", power_keep_awake, 1}};

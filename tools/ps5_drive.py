@@ -7,6 +7,14 @@
                                         build and launch the preview with its control channel; an
                                         auto-resolution app previews the given layout (default 2160p)
   ps5_drive.py press down               up/down/left/right/confirm/back/triangle/square/l1/r1/l2/r2/options
+  ps5_drive.py hold touchpad [ms]       holds a controller button (kButtonNames: cross, l3, touchpad, ...) in
+                                        Controller.getState(), for ms or until released; a button with an
+                                        action (cross: confirm) dispatches it as it goes down; held l2/r2 is
+                                        full travel
+  ps5_drive.py release touchpad         lets it go
+  ps5_drive.py trigger r2 0.6 [ms]      R2 (or L2) at 0.6 of its travel, for ms or until changed; past half
+                                        travel it is pressed (button and action), 0 lets go. Commands return
+                                        at once: script a hold as trigger r2 1, wait 800, trigger r2 0
   ps5_drive.py focus <focusKey>         move focus to an element by key
   ps5_drive.py shot <path.bmp> [full]  save the screen; `full` keeps the framebuffer's 2× resolution
   ps5_drive.py snapshot [--all|--json]  the focusable elements on screen, one line each with a ref:
