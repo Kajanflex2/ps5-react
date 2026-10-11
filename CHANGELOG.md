@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — less CPU per frame
+
+- The frame-time log reports `cpu=` cores and the render thread's CPU ms per frame
+  (docs/ANIMATION.md).
+
 ## Unreleased — cheaper mounts
 
 - `motion` elements run two effects each instead of six and add a context provider only

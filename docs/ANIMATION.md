@@ -396,7 +396,7 @@ Both hosts always print a summary every two seconds (illustrative values, not
 a PS5 measurement):
 
 ```text
-[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 (upload=0.8 draw=1.1 up=2100KB) swap=11.4 | js=0.4 (dispatch=0.1 react=0.2 marshal=0.1) layout=0.1 raster=2.7 (prepass=0.1 render=1.6 blit=1.0) dirty=310kpx blit=820kpx
+[PS5-REACT] frame: fps=59.9 total avg=16.7ms p95=17.1 max=21.4 | input=0.1 update=3.2 present=1.9 (upload=0.8 draw=1.1 up=2100KB) swap=11.4 | cpu=0.6 cores (main=4.8 present=0.9 swap=0.2) | js=0.4 (dispatch=0.1 react=0.2 marshal=0.1) layout=0.1 raster=2.7 (prepass=0.1 render=1.6 blit=1.0) dirty=310kpx blit=820kpx
 ```
 
 On the PS5, the line goes to the kernel log (`sceKernelDebugOutText`), which
@@ -412,6 +412,8 @@ omits it.
 | `update` | The JavaScript pump, React commits, layout, and CPU rasterization |
 | `present` | Uploading the damaged framebuffer rectangles and drawing them with OpenGL, split into `upload` (texture uploads, including newly shown layer images), `draw` (draw calls) and `up` (mean kilobytes uploaded per frame). Both are CPU time issuing the work; the GPU may finish it later, inside `swap` |
 | `swap` | Buffer swap, including any wait for vertical sync |
+| `cpu` | CPU time of the whole process over wall time, in cores: render workers, image decoding and network threads included |
+| `main`, `present`, `swap` (after `cpu`) | CPU ms per frame of the render thread, then its part in `present` and `swap`; wall time minus CPU time there is waiting |
 | `js` | JavaScript, split into `dispatch` (handlers, timers, microtasks), `react` (component renders) and `marshal` (props pushed into the engine) |
 | `layout` | Flex layout and text measurement |
 | `raster` | CPU rasterization, split into `prepass` (deciding what to repaint), `render` (compositing) and `blit` (framebuffer writes) |

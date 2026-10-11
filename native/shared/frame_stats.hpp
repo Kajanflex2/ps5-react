@@ -10,7 +10,9 @@ extern "C" {
 }
 
 // Wall-clock frame split, summarised once per window. The host supplies a
-// monotonic microsecond clock; nothing here allocates or calls the platform.
+// monotonic microsecond clock; nothing here allocates. Beside it, the POSIX CPU
+// clocks give the cores the whole process kept busy and the render thread's own
+// CPU time, so a wait that spins shows up as CPU time in present or swap.
 // It also opens and closes the engine's er_perf frame, so the summary adds the
 // engine's js/layout/raster split when ER_PERF_STATS is compiled in.
 class FrameStats {
@@ -49,5 +51,6 @@ private:
   std::uint32_t perf_frames_ = 0, slow_lines_ = 0, parallel_frames_ = 0, parallel_seen_ = 0;
   std::uint64_t upload_sum_ = 0, draw_sum_ = 0, upload_bytes_sum_ = 0;
   std::uint32_t upload_us_ = 0, draw_us_ = 0;
-  char line_[448] = {}, slow_line_[352] = {};
+  std::uint64_t process_cpu_start_ = 0, thread_cpu_start_ = 0, thread_cpu_mark_ = 0, thread_cpu_sum_[phase_count] = {};
+  char line_[512] = {}, slow_line_[352] = {};
 };

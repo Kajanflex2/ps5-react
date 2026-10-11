@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <iterator>
+#include <sys/resource.h>
+#include <time.h>
 
 namespace {
 // Integer tenths keep the line independent of the libc's floating-point printf.
@@ -18,6 +20,23 @@ Tenths tenths(std::uint64_t value, std::uint64_t divisor) {
 }
 
 #define MS(t) (t).whole, (t).tenth
+
+// CLOCK_PROCESS_CPUTIME_ID advances with the wall clock on the PS5, so the process total comes
+// from getrusage.
+std::uint64_t process_cpu_us() {
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage)) return 0;
+  const auto us = [](const timeval& t) {
+    return static_cast<std::uint64_t>(t.tv_sec) * 1000000 + static_cast<std::uint64_t>(t.tv_usec);
+  };
+  return us(usage.ru_utime) + us(usage.ru_stime);
+}
+
+std::uint64_t cpu_us(clockid_t clock) {
+  timespec t{};
+  if (clock_gettime(clock, &t)) return 0;
+  return static_cast<std::uint64_t>(t.tv_sec) * 1000000 + static_cast<std::uint64_t>(t.tv_nsec) / 1000;
+}
 } // namespace
 
 const char* FrameStats::start_frame(std::int64_t now_us) {
@@ -30,8 +49,11 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
     ++frames_;
   } else {
     window_start_ = now_us;
+    process_cpu_start_ = process_cpu_us();
+    thread_cpu_start_ = cpu_us(CLOCK_THREAD_CPUTIME_ID);
   }
   frame_start_ = mark_ = now_us;
+  thread_cpu_mark_ = cpu_us(CLOCK_THREAD_CPUTIME_ID);
 
   const std::int64_t elapsed = now_us - window_start_;
   if (frames_ && elapsed >= window_us) {
@@ -45,12 +67,20 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
                  max = tenths(total_max_, 1000);
     Tenths phase[phase_count];
     for (int i = 0; i < phase_count; ++i) phase[i] = tenths(phase_sum_[i], std::uint64_t{frames_} * 1000);
+    // Cores busy: process CPU time over wall time. `main` is the render thread's CPU ms per frame,
+    // then its part in present and in swap.
+    const std::uint64_t process_cpu = process_cpu_us();
+    const std::uint64_t thread_cpu = thread_cpu_mark_ - thread_cpu_start_;
+    const Tenths cores = tenths(process_cpu - process_cpu_start_, static_cast<std::uint64_t>(elapsed));
     const int length = std::snprintf(line_, sizeof line_,
                   "frame: fps=%u.%u total avg=%u.%ums p95=%u.%u max=%u.%u | input=%u.%u update=%u.%u present=%u.%u"
-                  " (upload=%u.%u draw=%u.%u up=%lluKB) swap=%u.%u",
+                  " (upload=%u.%u draw=%u.%u up=%lluKB) swap=%u.%u | cpu=%u.%u cores (main=%u.%u present=%u.%u swap=%u.%u)",
                   MS(fps), MS(avg), MS(p), MS(max), MS(phase[input]), MS(phase[update]), MS(phase[present]),
                   MS(tenths(upload_sum_, std::uint64_t{frames_} * 1000)), MS(tenths(draw_sum_, std::uint64_t{frames_} * 1000)),
-                  static_cast<unsigned long long>(upload_bytes_sum_ / frames_ / 1024), MS(phase[swap]));
+                  static_cast<unsigned long long>(upload_bytes_sum_ / frames_ / 1024), MS(phase[swap]), MS(cores),
+                  MS(tenths(thread_cpu, std::uint64_t{frames_} * 1000)),
+                  MS(tenths(thread_cpu_sum_[present], std::uint64_t{frames_} * 1000)),
+                  MS(tenths(thread_cpu_sum_[swap], std::uint64_t{frames_} * 1000)));
     if (perf_frames_ && length > 0 && length < static_cast<int>(sizeof line_)) {
       const std::uint64_t ms = std::uint64_t{perf_frames_} * 1000;
       // Mean ms per frame, and mean kilopixels repainted (dirty) and written (blit) per frame.
@@ -70,6 +100,9 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
     std::fill(std::begin(phase_sum_), std::end(phase_sum_), 0);
     total_sum_ = 0; total_max_ = 0; frames_ = 0;
     upload_sum_ = draw_sum_ = upload_bytes_sum_ = 0;
+    std::fill(std::begin(thread_cpu_sum_), std::end(thread_cpu_sum_), 0);
+    process_cpu_start_ = process_cpu;
+    thread_cpu_start_ = thread_cpu_mark_;
     std::fill(std::begin(engine_sum_), std::end(engine_sum_), 0);
     std::fill(std::begin(js_sub_sum_), std::end(js_sub_sum_), 0);
     std::fill(std::begin(raster_sub_sum_), std::end(raster_sub_sum_), 0);
@@ -84,6 +117,9 @@ const char* FrameStats::start_frame(std::int64_t now_us) {
 void FrameStats::lap(Phase phase, std::int64_t now_us) {
   phase_sum_[phase] += static_cast<std::uint64_t>(std::max<std::int64_t>(now_us - mark_, 0));
   mark_ = now_us;
+  const std::uint64_t thread_cpu = cpu_us(CLOCK_THREAD_CPUTIME_ID);
+  thread_cpu_sum_[phase] += thread_cpu > thread_cpu_mark_ ? thread_cpu - thread_cpu_mark_ : 0;
+  thread_cpu_mark_ = thread_cpu;
 }
 
 const char* FrameStats::end_frame(std::uint32_t slow_us) {
