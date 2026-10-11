@@ -87,8 +87,13 @@ def checkout(path, url, revision, patches=()):
     if current not in prefix:
         raise RuntimeError(f"Unexpected local changes in {path}: not the pinned revision plus its patches")
     for patch in patches[prefix.index(current):]:
-        # Intent-to-add, so files a patch creates show up in git diff like the rest.
-        run(["git", "apply", "--intent-to-add", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
+        run(["git", "apply", patch], cwd=path, log=ROOT / ".build/dependency-patch.log")
+        # Intent-to-add, so files a patch creates show up in git diff like the rest. Not through
+        # `git apply --intent-to-add`: that leaves only the patch's files in the index (git 2.48, 2.50),
+        # and the next run then finds every other file deleted.
+        created = [line.split(" ", 3)[-1] for line in subprocess.run(["git", "apply", "--summary", patch], cwd=path,
+                   capture_output=True, text=True, check=True).stdout.splitlines() if line.startswith(" create mode ")]
+        if created: run(["git", "add", "--intent-to-add", "--", *created], cwd=path)
 
 
 def dependency(name, override=None):

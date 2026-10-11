@@ -229,6 +229,45 @@ test('closing a modal returns focus to where it came from', () => {
   assert.equal(t.key(), 'open');
 });
 
+test('a page keeps where it returns to while a page opened over it comes and goes', () => {
+  const t = setup();
+  const browse = t.scope(t.focus.root);
+  t.node('heart', 0, 0, browse);
+  t.node('card', 0, 600, browse);
+  t.focus.mountScope(browse);
+  t.focus.focus('card');
+  const detail = t.scope(t.focus.root, {autoFocus: true, trap: true});
+  t.node('play', 0, 100, detail);
+  t.node('similar', 0, 800, detail);
+  t.focus.setProps(browse, {inert: true});
+  t.focus.mountScope(detail);
+  t.flush();
+  assert.equal(t.key(), 'play');
+
+  // The player over it, which focus reaches as it leaves the page gone inert, so closing it returns to
+  // the page. Closed by unmounting (recovery has no previous focus) and by going inert.
+  for (const close of ['unmount', 'inert']) {
+    const player = t.scope(t.focus.root, {trap: true});
+    const bar = t.node('bar', 0, 900, player);
+    t.focus.setProps(detail, {inert: true});
+    t.focus.mountScope(player);
+    t.flush();
+    assert.equal(t.key(), 'bar');
+    t.focus.setProps(detail, {trap: true});
+    if (close === 'unmount') {
+      t.focus.unmountScope(player);
+      t.focus.unregister(bar);
+    } else t.focus.setProps(player, {inert: true});
+    t.flush();
+    assert.equal(t.key(), 'play', close);
+  }
+
+  t.focus.setProps(browse, {});
+  t.focus.setProps(detail, {inert: true});
+  t.flush();
+  assert.equal(t.key(), 'card');
+});
+
 test('Circle bubbles through enclosing onBack handlers until one consumes it', () => {
   const t = setup();
   const calls = [];

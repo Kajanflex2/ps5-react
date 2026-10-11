@@ -5,7 +5,7 @@
 import {createFocusable} from './focusable.js';
 
 export {useFocusable, useIsFocused} from './focusable.js';
-export {FocusScope, useFocus, useNavigationEvents} from './scope.js';
+export {FocusScope, useFocus, useFocusActions, useNavigationEvents} from './scope.js';
 export {ScrollView} from './scroll.js';
 export {VirtualList} from './virtual-list.js';
 export {Image, ReleaseImages} from './image.js';

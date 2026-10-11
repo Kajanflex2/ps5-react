@@ -302,13 +302,17 @@ export class FocusManager {
     return rect ? {...rect} : null;
   }
 
-  /** @param {Node | null} next */
-  setFocus(next) {
+  /**
+   * @param {Node | null} next
+   * @param {boolean} [returning] focus goes back to where a closed layer was opened from: the scopes it
+   *   lands in keep where they return to, instead of returning into the closed layer
+   */
+  setFocus(next, returning = false) {
     const previous = this.focused;
     if (previous === next) return;
     this.focused = next;
     for (let scope = next?.scope; scope; scope = scope.parent) {
-      if (!previous || !within(previous.scope, scope)) scope.returnTo = previous;
+      if (!returning && (!previous || !within(previous.scope, scope))) scope.returnTo = previous;
       scope.remembered = next;
     }
     if (previous) {
@@ -346,8 +350,8 @@ export class FocusManager {
       return;
     }
     this.lostWhileClaimed = null;
-    const target = this.fallback(lost);
-    if (target) this.setFocus(target);
+    const {node, back} = this.fallback(lost);
+    if (node) this.setFocus(node, back);
     else for (const listener of this.listeners) listener();
   }
 
@@ -355,26 +359,28 @@ export class FocusManager {
   evict() {
     const node = this.focused;
     if (!node || navigable(node.scope)) return;
-    this.setFocus(this.fallback({scope: node.scope, rect: screenRect(node)}));
+    const target = this.fallback({scope: node.scope, rect: screenRect(node)});
+    this.setFocus(target.node, target.back);
   }
 
   /**
    * Where focus goes when it must leave `scope`: an unusable (dead or inert) scope's previous focus,
    * else the navigable element nearest `rect`, else the scope's remembered or first one, outward.
+   * `back` tells the first from the rest.
    * @param {{scope: Scope | null, rect: Rect | null}} from
-   * @returns {Node | null}
+   * @returns {{node: Node | null, back: boolean}}
    */
   fallback({scope, rect}) {
     for (; scope; scope = scope.parent) {
       if (scope.dead || !navigable(scope)) {
         const back = scope.returnTo;
-        if (back && !back.dead && navigable(back.scope)) return back;
+        if (back && !back.dead && navigable(back.scope)) return {node: back, back: true};
         continue;
       }
-      const target = (rect && findClosest(rect, this.candidates(scope))?.node) ?? this.firstOf(scope);
-      if (target) return target;
+      const node = (rect && findClosest(rect, this.candidates(scope))?.node) ?? this.firstOf(scope);
+      if (node) return {node, back: false};
     }
-    return null;
+    return {node: null, back: false};
   }
 
   /** @param {Node} node */

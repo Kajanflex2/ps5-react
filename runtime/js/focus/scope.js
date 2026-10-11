@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-import {createElement, useCallback, useContext, useLayoutEffect, useRef, useState} from 'react';
+import {createElement, useContext, useLayoutEffect, useRef, useState} from 'react';
 import {manager, navigationListeners, ScopeContext} from './runtime.js';
 
 /**
@@ -33,10 +33,22 @@ export function useFocus() {
     setKey(focusedKey());
     return manager.subscribe(() => setKey(focusedKey()));
   }, []);
-  const focus = useCallback(target => manager.focus(target), []);
-  const blur = useCallback(() => manager.blur(), []);
-  const focusedRect = useCallback(() => manager.focusedRect(), []);
-  return {focusedKey: key, focus, blur, focusedRect};
+  return {focusedKey: key, ...actions};
+}
+
+const actions = {
+  focus: target => manager.focus(target),
+  blur: () => manager.blur(),
+  focusedRect: () => manager.focusedRect(),
+};
+
+/**
+ * `useFocus()` without `focusedKey`: imperative focus that never re-renders the caller, for components
+ * that move focus but do not draw it (an app root, a page).
+ * @returns {{focus: (key: string) => boolean, blur: () => void, focusedRect: () => object | null}}
+ */
+export function useFocusActions() {
+  return actions;
 }
 
 /**
