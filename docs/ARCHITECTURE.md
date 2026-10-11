@@ -9,7 +9,7 @@ runtime/js (@ps5-react/core)         focus navigation, controller API, native mo
             ↓ React reconciler / NativeUI / QuickJS
 Embedded React C                    tree, layout, text, rasterization
             ↓ opaque ARGB8888 framebuffer
-native/shared/GlPresenter           changed rows into buffer textures (1:1) or a texture, presentation
+native/shared/GlPresenter           changed rows into a framebuffer texture, layers, presentation
             ↓
 native/desktop | native/ps5          window/EGL, input, clock, lifecycle,
                                      native modules via native/shared/host_api
@@ -28,16 +28,20 @@ pixels to the render thread, which registers them with the engine
 ([IMAGES.md](IMAGES.md)). Hosts cancel and join all workers before runtime
 shutdown. See
 [NETWORKING.md](NETWORKING.md) for the buffer, heap, stack and queue contract,
-and [NATIVE-API.md](NATIVE-API.md) for the bridge. When the surface matches the
-render size (the PS5), the presenter copies changed framebuffer rows into
-horizontal slices of buffer textures, each within the PS5's 1048576 texels per
-buffer texture (two at 1080p, eight at 2160p), that its shader reads with
-`texelFetch`, one draw per slice: there `glBufferSubData` of 1920×540 takes about
-0.46 ms against 14.9 ms for `glTexSubImage2D`. Other sizes scale a 2D texture.
-When the engine lists layers (`<Image layer>`, see [IMAGES.md](IMAGES.md)), the
-presenter first draws those images as textured quads, uploaded once per image,
-then the framebuffer over them with premultiplied blending; the engine leaves
-their rects transparent and keeps what it draws over them in the alpha channel.
+and [NATIVE-API.md](NATIVE-API.md) for the bridge. The presenter keeps a copy of the
+framebuffer in a 2D texture on the GPU. Each frame it replays the engine's moved
+rects there as framebuffer blits, then uploads the damaged rows, merged into
+bands, through small buffer textures that a shader draws into that texture with
+`texelFetch`: on the PS5 `glTexSubImage2D` of 3840×270 takes about 15 ms of CPU,
+and every draw costs about 25 µs plus 15 µs per MiB of the buffer textures it
+reads, so only the rows being uploaded live in buffer textures. One draw then
+puts that texture on screen, scaled and letterboxed when the surface differs
+from the render size. When the engine lists layers (`<Image layer>`, see
+[IMAGES.md](IMAGES.md)), that draw samples up to four of those images first (one more draw per four more), each
+uploaded once to its own texture, and the framebuffer over them with
+premultiplied blending; the engine leaves their rects transparent and keeps
+what it draws over them in the alpha channel. A frame that changed nothing is
+neither drawn nor swapped: the host sleeps to the next vertical sync.
 Every other pixel is still rasterized on the CPU. The presenter
 has no knowledge of React state, fonts, or widgets. The engine and JavaScript
 run on the same render thread. The PS5 host keeps the heap, shims, CRT, SDK

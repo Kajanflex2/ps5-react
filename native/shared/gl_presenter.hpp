@@ -22,15 +22,20 @@ public:
   // Uploads the whole buffer. Afterwards the GPU copy no longer mirrors the
   // engine framebuffer, so the next damage draw uploads everything again.
   bool draw(const std::uint32_t* argb, int surface_width, int surface_height);
-  // Uploads what changed (damage_tracker's contract): at one-to-one size the rows of
-  // `damage` and of the moved rects; otherwise `moves` are replayed on the texture and
-  // then `damage` uploaded. The first draw and any surface size change upload everything.
+  // Uploads what changed (damage_tracker's contract): `moves` are replayed on the GPU copy of the
+  // framebuffer, then the bands of `damage` uploaded. The first draw after the other overload, or
+  // after a move that fails, uploads everything.
   bool draw(const std::uint32_t* argb, std::span<const ERRect> damage, std::span<const DamageMove> moves,
             int surface_width, int surface_height);
   // Whether set_layers() can draw: hosts enable engine layers only then (er_set_layers_enabled).
-  bool layers_supported() const { return layer_program_ != 0 && max_texels_ > 0; }
+  bool layers_supported() const { return composite_program_ != 0; }
   // The layers the next present draws beneath the framebuffer, bottom first; valid until that present.
   void set_layers(std::span<const ERLayer> layers) { layers_ = layers; }
+  // Whether the screen already shows this frame: nothing damaged or moved, the layers as last drawn,
+  // and the same surface. A host can then skip draw() and the swap, and wait for the next vblank itself;
+  // on the PS5 a present costs the render thread about 2 ms of CPU even when nothing changed.
+  bool unchanged(std::span<const ERRect> damage, std::span<const DamageMove> moves, int surface_width,
+                 int surface_height) const;
   void release();
   // Where the last draw spent its CPU time: copying pixels to the GPU (framebuffer rows and new layer
   // images, which can block until the GPU is done with the previous frame's buffers), and issuing the
@@ -39,45 +44,56 @@ public:
   const Timing& last_timing() const { return timing_; }
 
 private:
-  unsigned int program_ = 0, texture_ = 0, vao_ = 0;
-  // A second texture and two framebuffers, created on the first move: GL cannot blit a texture onto itself.
-  unsigned int scratch_ = 0, read_fbo_ = 0, draw_fbo_ = 0;
+  // The framebuffer lives in a texture the screen is drawn from, changed rows and moves applied
+  // to it on the GPU. On the PS5 a draw costs the render thread about 25 us of CPU plus about 15 us
+  // per MiB of the buffer textures it reads, and a glClear 120 us: what the presenter draws from
+  // stays in 2D textures, and buffer textures carry only the rows being uploaded.
+  unsigned int frame_ = 0, frame_fbo_ = 0, vao_ = 0;
+  unsigned int composite_program_ = 0, stage_program_ = 0;
+  // A copy of the framebuffer texture, created on the first move: GL cannot blit a texture onto itself.
+  unsigned int scratch_ = 0, scratch_fbo_ = 0;
   int width_ = 0, height_ = 0, surface_width_ = 0, surface_height_ = 0;
+  // Whether the framebuffer texture mirrors the engine framebuffer.
   bool synced_ = false;
-  // Buffer textures of whole framebuffer rows for one-to-one presentation, slice i holding rows
-  // [i * slice_rows_, (i + 1) * slice_rows_). Empty when unsupported.
-  unsigned int buffer_program_ = 0;
-  std::vector<unsigned int> buffers_, buffer_textures_;
-  int slice_rows_ = 0;
-  bool buffer_synced_ = false;
-  // Layer images by engine image name, which the engine never reuses for other pixels, in buffer
-  // textures like the framebuffer: on the PS5 a 2D texture upload of one took 10-15 ms. Slice i holds
-  // rows [i * rows, (i + 1) * rows] (one row of overlap, for the bilinear pair). Images no layer drew
-  // are kept, least recently drawn freed first past kKeptLayerImages, so a page shown again does not
-  // upload its backdrop again.
+  // Texels per buffer texture (1048576 on the PS5); 0 uploads with glTexSubImage2D instead.
+  int max_texels_ = 0;
+  // Buffer textures for uploads, reused each present, respecified to the size of their rows.
+  struct Staging { unsigned int buffer = 0, texture = 0; };
+  std::vector<Staging> staging_;
+  std::size_t staged_ = 0;
+  std::vector<std::uint32_t> packed_;
+  // Layer images by engine image name, which the engine never reuses for other pixels, uploaded once.
+  // Images no layer drew are kept, least recently drawn freed first past kKeptLayerImages, so a page
+  // shown again does not upload its backdrop again.
   struct LayerImage {
     std::string name;
-    int width = 0, height = 0, rows = 0;
-    std::vector<unsigned int> buffers, textures;
+    int width = 0, height = 0;
+    unsigned int texture = 0, fbo = 0;
     std::uint64_t drawn = 0;
   };
   static constexpr int kKeptLayerImages = 4;
-  unsigned int layer_program_ = 0;
-  int max_texels_ = 0;
+  static constexpr int kPassLayers = 4;
   std::vector<LayerImage> layer_images_;
   std::uint64_t presents_ = 0;
   std::span<const ERLayer> layers_;
+  struct Drawn { const ERLayer* layer; const LayerImage* image; };
+  std::vector<Drawn> drawn_now_;
+  // What the last present drew of layers_, image names copied: theirs are valid only until a commit.
+  struct DrawnLayer {
+    std::string image;
+    ERLayer layer;
+  };
+  std::vector<DrawnLayer> drawn_layers_;
   Timing timing_;
 
-  bool one_to_one(int surface_width, int surface_height) const;
-  void upload_changed_rows(const std::uint32_t* argb, std::span<const ERRect> damage,
-                           std::span<const DamageMove> moves);
-  void upload_rows(const std::uint32_t* argb, int y0, int y1);
-  void release_buffer();
-  void upload(const std::uint32_t* argb, const ERRect& rect);
+  void upload_damage(const std::uint32_t* argb, std::span<const ERRect> damage);
+  void upload_rows(unsigned int target, unsigned int fbo, int width, int height, const std::uint32_t* pixels,
+                   int y0, int y1);
+  void upload_rect(unsigned int target, unsigned int fbo, int width, int height, const std::uint32_t* pixels,
+                   const ERRect& rect);
   bool move(const DamageMove& move);
   bool present(int surface_width, int surface_height);
   const LayerImage* layer_image(const ERLayer& layer);
   void free_layer_images(std::size_t keep);
-  void draw_layers(int x, int y, int w, int h);
+  void composite(int x, int y, int w, int h);
 };

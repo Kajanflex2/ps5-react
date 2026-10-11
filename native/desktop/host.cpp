@@ -128,6 +128,9 @@ struct Host {
   GlPresenter presenter;
   FrameStats stats;
   bool log_frames = true, running = true, runtime_started = false, backend_started = false;
+  // The interactive loop leaves a frame that changed nothing unpresented, as the PS5 host does; the
+  // self-tests read back every frame. exposed forces the next frame out after the window reappears.
+  bool skip_still = false, exposed = false;
   int render_worker_count = 1;
   Uint32 previous_tick = 0, next_repeat = 0, next_image_stats = 0;
   // When the last frame callback ran: the next one advances by the whole frame period, swap wait included.
@@ -358,6 +361,7 @@ struct Host {
     while (SDL_PollEvent(&event)) {
       const char* action = nullptr;
       if (event.type == SDL_QUIT) running = false;
+      if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_EXPOSED) exposed = true;
       // The host repeats held directions itself, so OS key repeats are ignored.
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         const SDL_Scancode key = event.key.keysym.scancode;
@@ -418,7 +422,10 @@ struct Host {
     int sw = 0, sh = 0;
     SDL_GL_GetDrawableSize(window, &sw, &sh);
     const std::size_t repainted = damage_tracker_area();
-    if (sw > 0 && sh > 0) {
+    const bool still = skip_still && !exposed && sw > 0 && sh > 0 &&
+                       presenter.unchanged(damage_tracker_rects(), damage_tracker_moves(), sw, sh);
+    exposed = false;
+    if (sw > 0 && sh > 0 && !still) {
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
       int layer_count = 0;
       const ERLayer* layers = er_get_layers(&layer_count);
@@ -429,10 +436,13 @@ struct Host {
         const GlPresenter::Timing& t = presenter.last_timing();
         stats.note_present(t.upload_us, t.draw_us, t.upload_bytes);
       }
-      damage_tracker_clear();
     }
+    if (sw > 0 && sh > 0) damage_tracker_clear();
     stats.lap(FrameStats::present, now_us());
-    if (swap) SDL_GL_SwapWindow(window);
+    if (still) {
+      SDL_DisplayMode mode{};
+      SDL_Delay(1000 / (SDL_GetWindowDisplayMode(window, &mode) == 0 && mode.refresh_rate > 0 ? mode.refresh_rate : 60));
+    } else if (swap) SDL_GL_SwapWindow(window);
     stats.lap(FrameStats::swap, now_us());
     if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), now_us(), repainted,
                                               static_cast<std::size_t>(width) * height);
@@ -747,6 +757,7 @@ int main(int argc, char** argv) {
       ok = SDL_SetWindowFullscreen(host.window, SDL_WINDOW_FULLSCREEN_DESKTOP) == 0;
       SDL_ShowCursor(SDL_DISABLE);
     }
+    host.skip_still = true;
     while (ok && host.running) ok = host.frame();
     if (host.profiler.running()) {
       host.profiler.stop();

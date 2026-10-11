@@ -411,7 +411,7 @@ omits it.
 | `input` | Controller polling and action dispatch to JavaScript, including any render a handler causes |
 | `update` | The JavaScript pump, React commits, layout, and CPU rasterization |
 | `present` | Uploading the damaged framebuffer rectangles and drawing them with OpenGL, split into `upload` (texture uploads, including newly shown layer images), `draw` (draw calls) and `up` (mean kilobytes uploaded per frame). Both are CPU time issuing the work; the GPU may finish it later, inside `swap` |
-| `swap` | Buffer swap, including any wait for vertical sync |
+| `swap` | Buffer swap, including any wait for vertical sync. A frame that changed nothing is not presented: the host sleeps to the next vertical sync instead |
 | `cpu` | CPU time of the whole process over wall time, in cores: render workers, image decoding and network threads included |
 | `main`, `present`, `swap` (after `cpu`) | CPU ms per frame of the render thread, then its part in `present` and `swap`; wall time minus CPU time there is waiting |
 | `js` | JavaScript, split into `dispatch` (handlers, timers, microtasks), `react` (component renders) and `marshal` (props pushed into the engine) |

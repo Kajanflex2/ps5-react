@@ -30,6 +30,7 @@
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "filesystem_access.hpp"
+#include <unistd.h>
 #include <EGL/egl.h>
 #include <ps5_opengl_display_modes.h>
 #include <algorithm>
@@ -340,7 +341,7 @@ bool run_proof() {
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
     async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
-    std::int64_t first_present = 0, previous = hui::sys::monotonic_us();
+    std::int64_t first_present = 0, previous = hui::sys::monotonic_us(), last_vblank_us = previous;
     // Replaced by the accepted mode after the first frame: a display without 120 Hz stays at 60.
     int refresh_hz = PS5_REACT_REFRESH_RATE;
     double tick_carry_ms = 0;
@@ -424,8 +425,13 @@ bool run_proof() {
       int layer_count = 0;
       const ERLayer* layers = er_get_layers(&layer_count);
       presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
-      ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(), display.width(),
-                          display.height());
+      // A frame that changed nothing is not presented: the screen keeps showing the last one, and the
+      // loop sleeps to the next vblank instead of waiting in the driver, which costs CPU.
+      const bool still = first_present && presenter.unchanged(damage_tracker_rects(), damage_tracker_moves(),
+                                                              display.width(), display.height());
+      if (!still)
+        ok = presenter.draw(er_software_framebuffer(), damage_tracker_rects(), damage_tracker_moves(),
+                            display.width(), display.height());
       er_perf_phase_end(ER_PERF_PHASE_PRESENT);
       {
         const GlPresenter::Timing& t = presenter.last_timing();
@@ -434,7 +440,15 @@ bool run_proof() {
       const std::size_t repainted = damage_tracker_area();
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
-      ok = ok && display.swap();
+      if (still) {
+        const std::int64_t wake = last_vblank_us + (hui::sys::monotonic_us() - last_vblank_us + 1000000 / refresh_hz) /
+                                                       (1000000 / refresh_hz) * (1000000 / refresh_hz);
+        const std::int64_t left = wake - hui::sys::monotonic_us();
+        if (left > 0) usleep(static_cast<useconds_t>(left));
+      } else {
+        ok = ok && display.swap();
+        last_vblank_us = hui::sys::monotonic_us();
+      }
       stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
       if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us(),

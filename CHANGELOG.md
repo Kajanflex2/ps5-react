@@ -2,6 +2,13 @@
 
 ## Unreleased — less CPU per frame
 
+- The presenter keeps the framebuffer in a GPU texture: moved rects are blitted there, damaged
+  rows are uploaded in merged bands through small buffer textures, and one draw composites the
+  layers and the framebuffer on screen. On the PS5 the render thread's present went from 3.3 to
+  0.9 ms of CPU per frame and the process from 0.90 to 0.75 cores on a tour of a media browser
+  app, at 59 fps. Desktop snapshots are unchanged; PS5 readbacks match the software
+  screenshots within 1/255.
+- Hosts neither draw nor swap a frame that changed nothing, and sleep to the next vertical sync.
 - The frame-time log reports `cpu=` cores and the render thread's CPU ms per frame
   (docs/ANIMATION.md).
 
