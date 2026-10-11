@@ -121,6 +121,17 @@ def main():
   with zipfile.ZipFile(zip,"w",compression=zipfile.ZIP_DEFLATED) as z:z.writestr("nested/game.ffpfsc",DATA)
   assert run("zip",[zip])[0]=="completed"
   assert (root/"zip/game.ffpfsc").read_bytes()==DATA
+  # The game runs as another user than the app: an extracted tree only its owner reads freezes the console
+  # at launch. Every folder and file is open to everyone, the extraction root included.
+  def open_to_all(tree):
+   for p in [tree,*tree.rglob("*")]:
+    if p.name.startswith(".ps5-react-"):continue
+    mode=p.stat().st_mode&0o777
+    assert mode==(0o777 if p.is_dir() else 0o666),(p,oct(mode))
+  app=root/"app.zip"
+  with zipfile.ZipFile(app,"w") as z:z.writestr("PPSA01473-app/sce_sys/param.json","{}");z.writestr("PPSA01473-app/eboot.bin",DATA)
+  assert run("zip-app",[app])[0]=="completed"
+  open_to_all(root/"zip-app")
   # A heap without room for an in-process extraction fails it cleanly, with nothing written.
   os.environ["ARCHIVE_NO_MEMORY"]="1"
   try:out=run("zip-no-memory",[zip])
@@ -310,6 +321,7 @@ def main():
   result=run("rar-multipart",rar_parts)
   assert result[0]=="completed",result
   assert any(p.is_file() and p.stat().st_size>0 for p in (root/"rar-multipart").rglob("*") if p.name!=".ps5-react-extraction")
+  open_to_all(root/"rar-multipart")
   # A set extracted while it downloads: each later volume appears under its final name by a rename, over
   # the empty file that reserves the name on the console.
   def stream(name,blobs,gap,extra=()):
