@@ -210,6 +210,8 @@ needs ([IMAGES.md](IMAGES.md)).
 - `useFocus()` → `{focusedKey, focus(key), blur(), focusedRect()}`. `focusedRect()` is where the
   focused element is on screen, `{x, y, width, height}` in render pixels with the scrolling around
   it applied (transforms are not), or `null`: to place a menu or tooltip next to it.
+- `useFocusActions()` → `{focus(key), blur(), focusedRect()}`, the same functions without
+  `focusedKey`: it never re-renders its component.
 - `useIsFocused()` inside a focusable subtree → boolean of the nearest focusable ancestor.
 - `BackHandler.addEventListener('hardwareBackPress', fn)` → `{remove()}`; `fn`
   returning `true` consumes Circle. Order: each enclosing `FocusScope.onBack`,
@@ -220,7 +222,9 @@ needs ([IMAGES.md](IMAGES.md)).
   input; see [Navigation events](#navigation-events).
 
 `useFocus()` re-renders its component whenever the focused key changes; call it
-in the component that needs `focusedKey`, not in every list item. `focus(key)`
+in the component that needs `focusedKey`, not in every list item. A component that only
+moves focus (an app root, a page) takes `useFocusActions()` instead: with `useFocus()`
+every D-pad move would re-render it and everything it renders. `focus(key)`
 returns whether something took focus, so it can be returned from `onBack`.
 
 ## Navigation events

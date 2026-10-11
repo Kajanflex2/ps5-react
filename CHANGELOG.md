@@ -2,6 +2,10 @@
 
 ## Unreleased — focus returns through stacked pages
 
+- Add `useFocusActions()`: `focus`, `blur` and `focusedRect` without subscribing to focus changes.
+  A component that called `useFocus()` only to move focus re-rendered, with everything under it, on
+  every D-pad move.
+
 - A page that had another opened over it (a detail page under a player) forgot where it was
   opened from once that one closed: focus coming back overwrote the page's return target with the
   closed layer, so closing the page too sent focus to whatever lay nearest, often a tab. Focus that
