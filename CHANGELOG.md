@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — extracted file permissions
+
+- Archives extracted in the app (ZIP, 7z, TAR, and RAR when rar-extract cannot start) write folders
+  0777 and files 0666, and every extraction root is 0777, whatever the app's umask. They were 0700
+  and 0600: a game extracted that way and installed by ShadowMount froze the console at launch until
+  its tree was set to 0777 by hand. rar-extract already wrote its files open.
+
 ## Unreleased — verified sandbox roots
 
 - After filesystem elevation, find /app0, /download0 and /temp0 from a descriptor opened on each

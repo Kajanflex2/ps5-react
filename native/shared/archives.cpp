@@ -115,6 +115,22 @@ bool plain_directory(const std::string& path) {
   struct stat st;
   return !lstat(path.c_str(), &st) && S_ISDIR(st.st_mode);
 }
+// The game runs as another user than this app and cannot launch from a tree only its owner reads, so
+// what an extraction writes is open to everyone whatever this process's umask, as rar-extract's output is.
+// chmod by path: titles already use it (fs.chmod); fchmod is unproven on the console.
+bool make_directory(const std::string& path) {
+  return !mkdir(path.c_str(), 0777) && !chmod(path.c_str(), 0777);
+}
+int create_file(const std::string& path) {
+  const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+  if (fd >= 0 && chmod(path.c_str(), 0666)) {
+    const int error = errno;
+    close(fd);
+    errno = error;
+    return -1;
+  }
+  return fd;
+}
 // Creates the directories of `name` under `root` and returns the path of its last component. `made`
 // holds the directories already created and checked, so a folder of many files costs no syscalls.
 bool make_parents(const std::string& root, const std::string& name, std::string& target, std::unordered_set<std::string>& made) {
@@ -131,7 +147,7 @@ bool make_parents(const std::string& root, const std::string& name, std::string&
     if (part == ".") continue;
     target += "/" + part;
     if (made.contains(target)) continue;
-    if (mkdir(target.c_str(), 0700) && errno != EEXIST) return false;
+    if (!make_directory(target) && errno != EEXIST) return false;
     if (!plain_directory(target)) { errno = ENOTDIR; return false; }
     made.insert(target);
   }
@@ -485,11 +501,11 @@ std::string extract(Job& job, archive* archive, const std::string& staging, std:
     if (!make_parents(staging, path, target, made)) return std::strerror(errno);
     if (type == AE_IFDIR) {
       if (made.contains(target)) continue;
-      if (mkdir(target.c_str(), 0700) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
+      if (!make_directory(target) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
       made.insert(target);
       continue;
     }
-    const int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    const int fd = create_file(target);
     if (fd < 0) return std::strerror(errno);
     std::string digest;
     std::uint32_t crc = 0;
@@ -745,7 +761,7 @@ void run(const std::shared_ptr<Job>& pointer) {
       return;
     }
   }
-  if (mkdir(staging.c_str(), 0700)) {
+  if (!make_directory(staging)) {
     fail(job, std::strerror(errno));
     return;
   }
