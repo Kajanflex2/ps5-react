@@ -4,13 +4,14 @@
 // Video Lab: plays every file in /app0/media and every URL listed in /app0/media/urls.txt
 // ("Label | URL" per line), with the player's measurements on screen. media/ is not part of the
 // repository: copy test footage there (on the PS5, into the title folder's media/).
-// For unattended runs, /app0/dev/playlist.txt ("file seconds [seek-to]" per line) plays each file for that
-// long, logs a summary line per file and quits.
+// For unattended runs, /app0/dev/playlist.txt ("file seconds [seek-to] [upscaler]" per line, the upscaler
+// one of UPSCALERS) plays each file for that long, logs a summary line per file and quits.
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {AppRegistry, View, Text, FocusScope, FileSystem, Video, BackHandler} from '@ps5-react/core';
 import {useInterfaceSounds} from './sounds.js';
 
 const MEDIA = '/app0/media';
+const UPSCALERS = ['artcnn', 'anime4k-s', 'anime4k-m', 'anime4k-l', 'anime4k-vl', 'anime4k-ul'];
 const VIDEO_FILE = /\.(mp4|m4v|mov|mkv|webm|ts|m2ts|avi|flv|mpg|mpeg|ogv)$/i;
 
 function readSources() {
@@ -88,6 +89,7 @@ function Player({source, onClose}) {
   const [error, setError] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [subtitleTrack, setSubtitleTrack] = useState(-1);
+  const [upscale, setUpscale] = useState('');
   const rate = useRate(status);
 
   // The status arrives every frame; the overlay renders twice a second.
@@ -125,6 +127,7 @@ function Player({source, onClose}) {
     <FocusScope autoFocus trap onBack={() => { onClose(); return true; }} onAction={onAction}>
       <View className="w-screen h-screen bg-black">
         <Video ref={video} source={source.uri} paused={paused} className="absolute inset-0" subtitleTrack={subtitleTrack}
+          upscale={upscale}
           onEnd={() => setPaused(true)} onError={event => setError(event.error)} onSubtitle={setSubtitle} />
         {!!subtitle && (
           <View className="absolute left-0 right-0 bottom-40 items-center">
@@ -164,6 +167,8 @@ function Player({source, onClose}) {
           <Button label="+10 s" onPress={() => seekBy(10)} />
           <Button label="Audio" onPress={nextTrack} />
           <Button label={subtitleTrack < 0 ? 'Subtitles off' : `Subtitles ${subtitleTrack}`} onPress={nextSubtitles} />
+          <Button label={upscale || 'No upscaler'}
+            onPress={() => setUpscale(value => ['', ...UPSCALERS][(UPSCALERS.indexOf(value) + 2) % (UPSCALERS.length + 1)])} />
           <Text className="font-inter text-hint text-accent">L1/R1 seek 60 s | Triangle info | Square audio | Circle back</Text>
         </View>
       </View>
@@ -174,9 +179,11 @@ function Player({source, onClose}) {
 function readPlaylist(sources) {
   try {
     return FileSystem.readFile('/app0/dev/playlist.txt').split('\n').map(line => line.trim().split(/\s+/))
-      .filter(([name]) => name).map(([name, seconds, seek]) => ({
-        source: sources.find(source => source.label === name) ?? {label: name, uri: `${MEDIA}/${name}`},
-        seconds: Number(seconds) || 10, seek: seek === undefined ? null : Number(seek)}));
+      .filter(([name]) => name).map(([name, seconds, ...rest]) => {
+        const upscale = rest.find(word => UPSCALERS.includes(word)) ?? '', seek = rest.find(word => !UPSCALERS.includes(word));
+        return {source: sources.find(source => source.label === name) ?? {label: name, uri: `${MEDIA}/${name}`},
+          seconds: Number(seconds) || 10, seek: seek === undefined ? null : Number(seek), upscale};
+      });
   } catch {
     return null;
   }
@@ -196,7 +203,7 @@ function PlaylistRun({playlist}) {
     const seek = item.seek === null ? null : setTimeout(() => video.current?.seek(item.seek), item.seconds * 500);
     const timer = setTimeout(() => {
       const s = video.current?.getStatus();
-      console.log(s ? `playlist ${item.source.label}: ${s.state} ${s.decoder} ${s.videoCodec} ${s.width}x${s.height} `
+      console.log(s ? `playlist ${item.source.label}${item.upscale ? ` (${item.upscale})` : ''}: ${s.state} ${s.decoder} ${s.videoCodec} ${s.width}x${s.height} `
         + `pos=${s.position.toFixed(1)} shown=${s.shownFrames} dropped=${s.droppedFrames} late=${s.lateMs.toFixed(1)}ms `
         + `clock=${s.audioClock ? 'audio' : 'wall'} audio=${s.audioCodec || '-'} ${s.error}` : `playlist ${item.source.label}: no status`);
       setIndex(i => i + 1);
@@ -206,7 +213,7 @@ function PlaylistRun({playlist}) {
   if (!item) return null;
   return (
     <View className="w-screen h-screen bg-black">
-      <Video key={index} ref={video} source={item.source.uri} className="absolute inset-0"
+      <Video key={index} ref={video} source={item.source.uri} className="absolute inset-0" upscale={item.upscale}
         onError={event => console.log(`playlist ${item.source.label}: error ${event.error}`)} />
     </View>
   );
