@@ -284,7 +284,8 @@ only: `fontWeight` 600 and above is bold, everything else regular.
 
 Radii round backgrounds, gradients, borders and an `Image`'s bitmap. A rounded
 `overflow-hidden` parent clips its children to its rectangle, not its corners:
-round the image itself.
+round the image itself, or give the parent `style={{roundedClip: true}}` to clip
+its children to its corners (no class; see [ANIMATION.md](ANIMATION.md#a-light-across-a-card)).
 
 ### Effects, images, and transforms
 
@@ -591,7 +592,8 @@ These fail the build with the reason shown. Any other unknown class fails with
 | `ring-*`, `outline-*` | Use `border-*` |
 | `transition-colors`, `transition-shadow`, `animate-<other>`, other `transition-*`, `duration-*`, `ease-*`, `delay-*` values | Only the [animation classes](#animation-classes) are supported |
 | `bg-gradient-<other>`, `bg-none` | Only `bg-gradient-to-*` linear [gradients](#gradients); remove the class to drop one |
-| `blur`, `brightness`, `contrast`, `grayscale`, `hue-rotate`, `invert`, `saturate`, `sepia`, `backdrop-*`, `filter`, `mix-blend-*`, `bg-blend-*` | No filters or blending |
+| `blur`, `brightness`, `contrast`, `grayscale`, `hue-rotate`, `invert`, `saturate`, `sepia`, `backdrop-*`, `filter`, `bg-blend-*` | No filters or blending |
+| `mix-blend-*` | Only `style={{mixBlendMode: 'plus-lighter'}}` |
 | `bg-opacity-*`, `text-opacity-*`, `border-opacity-*` | Use a color opacity modifier such as `bg-black/50` |
 | `skew-*` | No skew transform |
 | `invisible`, `visible`, `collapse` | Use `opacity-0` or `hidden` |

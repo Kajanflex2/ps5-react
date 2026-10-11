@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — light on glass
+
+- Add the View styles `roundedClip` and `mixBlendMode: 'plus-lighter'`
+  (`patches/embeddedReact-rounded-clip-blend.patch`). `roundedClip: true` clips children to the
+  view's rounded border box, anti-aliased like a rounded background of that box; `overflow:
+  'hidden'` alone is unchanged. `plus-lighter` adds a subtree's drawing to what is beneath it,
+  through the new optional backend `add_rect`, which the software backend implements and the
+  damage tracker wraps. Neither has a Tailwind class; `mix-blend-*` now names the style in its
+  error. Desktop tests only; not yet run on a PS5.
+
 ## Unreleased — rows and the touchpad
 
 - `FocusScope row`: Left and Right stop at a row's ends instead of stepping into the rows around it
