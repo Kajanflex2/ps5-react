@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — focus returns through stacked pages
+
+- A page that had another opened over it (a detail page under a player) forgot where it was
+  opened from once that one closed: focus coming back overwrote the page's return target with the
+  closed layer, so closing the page too sent focus to whatever lay nearest, often a tab. Focus that
+  goes back to where a closed layer was opened from now leaves the return targets of the scopes it
+  lands in alone.
+
 ## Unreleased — local time
 
 - Add `DeviceInfo.utcOffset(time)` (native ABI v14, `device.utcOffset`): the system time zone's
