@@ -5,12 +5,13 @@
 
 #include <cstddef>
 
-// Input actions (input ABI v3): what hosts pass to globalThis.__ps5ReactDispatch and input scripts
-// accept. runtime/js/input.js names the same actions for JavaScript.
-enum class HostAction : unsigned char { up, down, left, right, confirm, back, l1, r1, l2, r2, triangle, square };
+// Input actions (input ABI v4): what hosts pass to globalThis.__ps5ReactDispatch and input scripts
+// accept. runtime/js/input.js names the same actions for JavaScript. `options` comes only from apps
+// with "optionsButton": "app"; for the others Options exits.
+enum class HostAction : unsigned char { up, down, left, right, confirm, back, l1, r1, l2, r2, triangle, square, options };
 
 inline constexpr const char* kActionNames[] = {
-  "up", "down", "left", "right", "confirm", "back", "l1", "r1", "l2", "r2", "triangle", "square",
+  "up", "down", "left", "right", "confirm", "back", "l1", "r1", "l2", "r2", "triangle", "square", "options",
 };
 
 constexpr const char* action_name(HostAction action) { return kActionNames[static_cast<std::size_t>(action)]; }

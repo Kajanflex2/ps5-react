@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Options for apps
+
+- `"optionsButton": "app"` in `app.json` hands Options (Escape and a controller's Start on the
+  desktop) to the app as the `options` action (input protocol v4), for `FocusScope.onAction` and
+  `useController`, instead of closing it; the PS button leaves. The default, `"exit"`, keeps the
+  host's exit.
+
 ## Unreleased — resolution auto
 
 - The starter, and so every `npm run create` scaffold, uses `"resolution": "auto"` at 60 Hz. It

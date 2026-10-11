@@ -371,7 +371,11 @@ struct Host {
       // The host repeats held directions itself, so OS key repeats are ignored.
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         const SDL_Scancode key = event.key.keysym.scancode;
-        if (event.key.keysym.sym == SDLK_ESCAPE) running = false;
+        // Escape stands for Options: it exits, unless the app takes Options as an action.
+        if (event.key.keysym.sym == SDLK_ESCAPE) {
+          if (PS5_REACT_OPTIONS_TO_APP) action = action_name(HostAction::options);
+          else running = false;
+        }
         for (const auto& [code, mapped] : kKeyActions) {
           if (code == event.key.keysym.sym) action = repeats(mapped) ? hold(action_name(mapped), key) : action_name(mapped);
         }
@@ -381,6 +385,7 @@ struct Host {
           if (code == button)
             action = repeats(mapped) ? hold(action_name(mapped), SDL_SCANCODE_UNKNOWN, button) : action_name(mapped);
         }
+        if (PS5_REACT_OPTIONS_TO_APP && button == SDL_CONTROLLER_BUTTON_START) action = action_name(HostAction::options);
       } else if (event.type == SDL_CONTROLLERAXISMOTION) {
         // Triggers are analog: an action on crossing half travel, re-armed below a quarter.
         const auto trigger = [&](bool& down, const char* name) {

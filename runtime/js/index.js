@@ -23,7 +23,8 @@ export {Platform, DeviceInfo, FileSystem, Notifications, Users, Controller, useG
 const legacyActions = {up: 'previous', left: 'previous', down: 'next', right: 'next'};
 
 /**
- * Subscribe while mounted; Options is reserved for the host's exit action.
+ * Subscribe while mounted. Options exits through the host unless app.json has "optionsButton": "app",
+ * which delivers it as the `options` action.
  * @param {(action: import('./input.js').Action | 'previous' | 'next') => void} handler
  */
 export function useController(handler) {

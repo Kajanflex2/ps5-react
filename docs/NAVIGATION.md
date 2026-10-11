@@ -60,7 +60,7 @@ AppRegistry.registerComponent('menu', () => Menu);
 `npm run create` scaffolds this menu; `apps/starter`, `apps/tailwind-gallery`,
 `apps/system-explorer`, and `apps/motion-lab` use the patterns below.
 
-## Host input (input protocol v3)
+## Host input (input protocol v4)
 
 The input protocol is versioned on its own; it is not the native API's ABI
 version ([NATIVE-API.md](NATIVE-API.md#contract)).
@@ -69,12 +69,17 @@ version ([NATIVE-API.md](NATIVE-API.md#contract)).
 `back`, and, since input protocol v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
 (one action per press, no repeat). For input protocol v1 compatibility the runtime also
 delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
-`useController` handlers only. Options/Escape still exit. Both hosts and input
-scripts take the names from `native/shared/actions.hpp`.
+`useController` handlers only. Both hosts and input scripts take the names from
+`native/shared/actions.hpp`.
 
-The focus manager does not move on the input protocol v3 buttons: they go to the enclosing
-`FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle) and to
-`useController`.
+Options (Escape on desktop) closes the app, unless `app.json` sets
+`"optionsButton": "app"`. Then, since input protocol v4, it arrives as the `options`
+action like the buttons above, and the PS button is how the user leaves. A media app
+uses it for its settings, as the system apps do.
+
+The focus manager does not move on these buttons: they go to the enclosing
+`FocusScope.onAction` handlers (tabs on L1/R1, a filter on Triangle, settings on Options)
+and to `useController`.
 
 Once per frame, after the pump and before the commit, hosts also call
 `globalThis.__ps5ReactFrame(elapsedMs)` with the time the frame advances (on the
@@ -90,7 +95,7 @@ frames.
 | `l1`, `r1` | Q, E | L1, R1 |
 | `l2`, `r2` | Z, C | L2, R2 (past half travel on the desktop) |
 | `triangle`, `square` | T, F | Triangle, Square |
-| Exit (handled by the host) | Escape | Options |
+| `options` with `"optionsButton": "app"`, otherwise exit (handled by the host) | Escape, controller Start | Options |
 
 ## Focusable elements
 
@@ -151,7 +156,7 @@ express the order you want, and use `nextFocus*` only for exceptions.
 | `wrap` | Moving past the last element in a direction wraps to the first in that row/column; with nothing in that row/column (Down from a tab row), focus leaves the scope as usual unless it traps |
 | `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
 | `onBack` | Handles Circle while focus is inside; return `true` to consume |
-| `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, and `square` while focus is inside, innermost scope first; return `true` to consume |
+| `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, `square`, and `options` (with `"optionsButton": "app"`) while focus is inside, innermost scope first; return `true` to consume |
 | `focusKey` | Name for `focus(key)` on the scope (focuses its remembered element) |
 | `inert` | Takes the scope's subtree out of navigation while true: no candidates, no `autoFocus`, no `focus(key)`; focus inside moves out after the commit |
 
@@ -197,7 +202,7 @@ It never re-renders its component, so call it once near the root.
 | `{type: 'blocked', direction}` | Nothing to move to: an edge, a trap, or no focusable element |
 | `{type: 'press', handled}` | Cross on the focused element; `handled` when it is enabled and has `onPress` (no event without focus) |
 | `{type: 'back', handled}` | Circle; `handled` when an `onBack` or `BackHandler` listener consumed it |
-| `{type: 'action', action, handled}` | L1, R1, L2, R2, Triangle or Square; `handled` when an `onAction` returned `true` |
+| `{type: 'action', action, handled}` | L1, R1, L2, R2, Triangle, Square or Options; `handled` when an `onAction` returned `true` |
 
 Held directions repeat, so `move` arrives on every repeat. `FocusManager.move`
 and `press` report the same outcomes (`true`/`false`, `null` for a press
@@ -465,8 +470,8 @@ useEffect(() => {
 }, [playing]);
 ```
 
-`BackHandler.exitApp()` quits explicitly; Options (Escape on desktop) remains
-the host's exit action.
+`BackHandler.exitApp()` quits explicitly. Options (Escape on desktop) exits through the host
+unless the app takes it as an action (`"optionsButton": "app"`).
 
 ## Custom focusable components
 

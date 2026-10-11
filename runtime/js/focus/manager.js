@@ -230,7 +230,7 @@ export class FocusManager {
   }
 
   /**
-   * Shoulders, triggers, Triangle and Square: each enclosing scope's `onAction`, innermost first,
+   * Shoulders, triggers, Triangle, Square and Options: each enclosing scope's `onAction`, innermost first,
    * until one consumes it. @param {Action} action @returns {boolean}
    */
   action(action) {

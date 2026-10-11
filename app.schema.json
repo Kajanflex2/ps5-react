@@ -37,6 +37,11 @@
       "maximum": 3600,
       "description": "Seconds after first frame until closure; 0 disables the timeout."
     },
+    "optionsButton": {
+      "enum": ["exit", "app"],
+      "default": "exit",
+      "description": "exit: Options (Escape on desktop) closes the app. app: it reaches the app as the options action, and the PS button leaves."
+    },
     "render": {
       "type": "object",
       "required": [

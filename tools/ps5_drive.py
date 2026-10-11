@@ -6,7 +6,7 @@
   ps5_drive.py start --app-dir <dir> [1080p|2160p]
                                         build and launch the preview with its control channel; an
                                         auto-resolution app previews the given layout (default 2160p)
-  ps5_drive.py press down               up/down/left/right/confirm/back/triangle/square/l1/r1/l2/r2
+  ps5_drive.py press down               up/down/left/right/confirm/back/triangle/square/l1/r1/l2/r2/options
   ps5_drive.py focus <focusKey>         move focus to an element by key
   ps5_drive.py shot <path.bmp> [full]  save the screen; `full` keeps the framebuffer's 2× resolution
   ps5_drive.py snapshot [--all|--json]  the focusable elements on screen, one line each with a ref:

@@ -237,7 +237,8 @@ Menus use focus navigation ([NAVIGATION.md](NAVIGATION.md)). `useController`
 receives the raw `up`, `down`, `left`, `right`, `confirm`, `back`, `l1`, `r1`,
 `l2`, `r2`, `triangle`, and `square` actions (plus `previous`/`next` for
 compatibility); `useGamepad` is for raw analog and
-button state. Options is still reserved for the host's exit action.
+button state. Options exits through the host, unless `app.json` has `"optionsButton": "app"`: then
+it arrives as the `options` action ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v4)).
 
 ## Sound
 
@@ -343,7 +344,8 @@ hardware.**
 ## BackHandler
 
 `BackHandler.exitApp()` asks the host to close the app after the current frame,
-exactly like pressing Options (React Native's name for the same call).
+exactly like pressing Options in an app that leaves Options to the host (React Native's name for
+the same call).
 
 `BackHandler.exitApp({relaunch: true})` also opens the app again once it has closed, and returns
 whether that was arranged. An app cannot launch itself after it exits, so on PS5 it sends

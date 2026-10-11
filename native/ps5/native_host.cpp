@@ -383,7 +383,8 @@ bool run_proof() {
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
-    async_log::write("[PS5-REACT] Options closes; timeout=%ds after first frame", PS5_REACT_TIMEOUT);
+    async_log::write("[PS5-REACT] Options %s; timeout=%ds after first frame", PS5_REACT_OPTIONS_TO_APP ? "goes to the app" : "closes",
+                     PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us(), last_vblank_us = previous;
     // Replaced by the accepted mode after the first frame at a rate: a display without 120 Hz stays at 60.
     int refresh_hz = PS5_REACT_REFRESH_RATE;
@@ -452,7 +453,10 @@ bool run_proof() {
       er_set_raster_deferred(true);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
-      if (input.is_pressed(hui::Action::menu)) break;
+      if (input.is_pressed(hui::Action::menu)) {
+        if (!PS5_REACT_OPTIONS_TO_APP) break;
+        ok = dispatch(action_name(HostAction::options));
+      }
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
       host_platform_tick(now);
       ps5_react_set_gamepad(gamepad_state(input));
