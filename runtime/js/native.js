@@ -51,6 +51,12 @@ export const Platform = {
 export const DeviceInfo = {
   /** @returns {Device} */
   get: () => host().device.info(),
+  /**
+   * Minutes east of UTC in the system time zone at `time` (default now), summer time included:
+   * the local clock reads `time + utcOffset(time) * 60000` as UTC.
+   * @param {number} [time] milliseconds since the epoch @returns {number}
+   */
+  utcOffset: (time = Date.now()) => host().device.utcOffset(time),
 };
 
 // The title is sandboxed: paths are app paths such as /app0 (read-only) and /download0.

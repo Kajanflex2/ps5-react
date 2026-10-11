@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v13) is
+each host installs before the bundle runs. Its exact shape (ABI v14) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -67,6 +67,14 @@ const label = Platform.select({ps5: 'Console', desktop: 'Preview', default: 'Unk
 | `language` | string | System language as a BCP 47 tag (`en-US`, `pt-BR`, `zh-Hans`) |
 
 Any value the host cannot read is `null`.
+
+`DeviceInfo.utcOffset(time = Date.now())` (ABI v14) returns the system time
+zone's offset from UTC at that instant in minutes, summer time included: `120`
+for Central European Summer Time, `-300` for US Eastern Standard Time. With no
+`Date` objects in the runtime, local time is arithmetic on
+`time + utcOffset(time) * 60000`. Pass the instant you are converting, not the
+current time, when it may fall on the other side of a summer-time change. The
+PS5 reads the zone set in the console's settings; the desktop preview the Mac's.
 
 ## FileSystem
 
