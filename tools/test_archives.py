@@ -388,17 +388,21 @@ def main():
   (root/"zip/game.ffpfsc").write_bytes(b"corrupt")
   assert run("zip",[zip])[0]=="failed"
   # Inspection names a file by its bytes and refuses a too-large window from a download's first bytes.
-  def inspect(*paths):
-   return subprocess.check_output([str(binary),"inspect",*map(str,paths)],text=True,timeout=20).split("\n")[:2]
+  def inspect(*paths,budget=None):
+   args=[] if budget is None else ["--budget",str(budget)]
+   return subprocess.check_output([str(binary),"inspect",*args,*map(str,paths)],text=True,timeout=20).split("\n")[:2]
   def partial(name,content,keep,hole=0):
    p=root/name;p.write_bytes(content[:keep]+bytes(hole));return p
   big_rar=rar5_with_window(9)
   assert inspect(partial("big.rar.part",big_rar,len(big_rar)-40,1<<20))==["rar",TOO_BIG]
   small_rar=rar5_with_window(8)
   assert inspect(partial("small.rar.part",small_rar,len(small_rar)-40,1<<20))==["rar",""]
-  # The walk's time budget still reaches a window declared thousands of files in, read from a local disk.
-  late_rar=rar5_with_window(*[8]*5000,9)
-  assert inspect(partial("late.rar.part",late_rar,len(late_rar)-40,1<<20))==["rar",TOO_BIG]
+  # The walk reads the first file header whatever its budget, and stops after it once the budget is spent;
+  # within its budget it reaches a window declared thousands of files in.
+  assert inspect(partial("big.rar.part",big_rar,len(big_rar)-40,1<<20),budget=0)==["rar",TOO_BIG]
+  late=rar5_with_window(*[8]*5000,9);late_rar=partial("late.rar.part",late,len(late)-40,1<<20)
+  assert inspect(late_rar,budget=0)==["rar",""]
+  assert inspect(late_rar,budget=60000)==["rar",TOO_BIG]
   assert inspect(rar_parts[0])==["rar",""]
   assert inspect(partial("hole.part",big_rar,0,1<<20))==["",""]
   assert inspect(partial("zip.part",zip.read_bytes(),200))==["zip",""]

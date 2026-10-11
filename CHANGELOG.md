@@ -2,10 +2,12 @@
 
 ## Unreleased — bounded archive inspection
 
-- `Archives.inspect` walks a RAR's headers for about 100 ms at most, instead of up to 4096 of them.
-  Each header sits after the previous file's data, so on a large volume each is a disk read of its
-  own: on a tester's console, inspecting a game archive while it downloaded at ~105 MB/s held the
-  render thread for over 40 s. The extraction's preflight still reads every header.
+- `Archives.inspect` reads a RAR's first file header, then walks the next ones for about 100 ms
+  (plus the header under way), instead of up to 4096 of them. Each header sits after the previous
+  file's data, so on a large volume each is a disk read of its own: on a tester's console, inspecting
+  a game archive while it downloaded at ~105 MB/s held the render thread for over 40 s. A header the
+  walk misses is still refused before anything is extracted: by the preflight, or in a set extracted
+  while it downloads (also checked with `inspect`), by the RAR worker.
 
 ## Unreleased — extracted file permissions
 
