@@ -3,7 +3,8 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 // React Native-style modules over the host contract in native/shared/host_api.hpp.
 // Every call is synchronous and runs on the render thread; see docs/NATIVE-API.md.
-import {useEffect, useState} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {gamepadSource} from './controller-events.js';
 import {normalizeDownloadManifest} from './download-formats.js';
 import {onFrameUnbatched} from './frame.js';
 
@@ -120,23 +121,94 @@ export const Controller = {
   /** @param {number} [strength] 0..1 @param {number} [ms] */
   vibrate: (strength = 1, ms = 200) => host().pad.vibrate(strength, ms / 1000),
   /**
-   * DualSense adaptive trigger resistance. From `from` of the travel (0 top, 1 bottom) on, the
-   * trigger pushes back at `strength` (0..1, in eight steps); `strength` 0 releases it. The PS5
-   * releases the triggers when the app quits; the desktop preview only logs the request.
+   * DualSense adaptive trigger resistance: `setTriggerEffect(trigger, {type: 'resistance', from,
+   * strength})`. From `from` of the travel (0 top, 1 bottom) on, the trigger pushes back at `strength`
+   * (0..1, in eight steps); `strength` 0 releases it.
    * @param {'l2' | 'r2' | 'both'} trigger @param {number} strength @param {number} [from]
    */
   setTriggerResistance(trigger, strength, from = 0) {
-    const mask = TRIGGER_MASKS[trigger];
-    if (!mask) throw new Error(`Controller.setTriggerResistance: trigger must be 'l2', 'r2' or 'both', got '${trigger}'`);
-    if (!(strength >= 0 && strength <= 1) || !(from >= 0 && from <= 1))
-      throw new RangeError(`Controller.setTriggerResistance: strength and from must be 0..1, got ${strength} and ${from}`);
-    host().pad.setTriggerResistance(mask, Math.round(from * 9), strength > 0 ? Math.max(1, Math.round(strength * 8)) : 0);
+    applyTriggerEffect('Controller.setTriggerResistance', trigger, {type: 'resistance', from, strength});
+  },
+  /**
+   * A DualSense adaptive trigger effect, replacing the trigger's last one. Positions are fractions of
+   * the travel (0 top, 1 bottom), strengths and amplitudes 0..1 in eight steps (0 is off):
+   * - `{type: 'off'}`
+   * - `{type: 'resistance', from = 0, strength}`: pushes back from `from` to the bottom.
+   * - `{type: 'weapon', start, end, strength}`: resists between `start` and `end`, then gives way
+   *   with a click, like a gun trigger. The controller places them in zones: `start` 0.2..0.8, `end`
+   *   at least a zone (0.1) past it and at most 0.9; values outside are moved there.
+   * - `{type: 'vibration', from = 0, amplitude, frequency}`: buzzes from `from` on, at `frequency`
+   *   Hz (1..255).
+   * The PS5 turns the triggers off when the app quits; the desktop preview only logs the request.
+   * @param {'l2' | 'r2' | 'both'} trigger @param {TriggerEffect} effect
+   */
+  setTriggerEffect(trigger, effect) {
+    applyTriggerEffect('Controller.setTriggerEffect', trigger, effect);
   },
   /** @returns {GamepadState} */
   getState: () => host().pad.state(),
+  /**
+   * Calls `listener` with the controller's events, once per frame, until the returned function is
+   * called: `press` and `release` (with `heldMs`) for every button in GamepadState, L2 and R2 at the
+   * host's press threshold and the touchpad included, then `trigger` when L2's or R2's travel changes.
+   * With `frames`, a `frame` event ends every frame, for work that steps while something is held. A
+   * button held when the listener starts is not a press for it. A press and release within one frame
+   * are not seen; the host's actions (useController) are.
+   * @param {(event: ControllerEvent) => void} listener
+   * @param {{frames?: boolean}} [options]
+   * @returns {() => void}
+   */
+  subscribe(listener, {frames = false} = {}) {
+    return pad.watch((state, events, elapsedMs) => {
+      for (const event of events) listener(event);
+      if (frames) listener({type: 'frame', elapsedMs, state});
+    });
+  },
 };
 
+/**
+ * @typedef {import('./controller-events.js').ControllerEvent} ControllerEvent
+ * @typedef {{type: 'off'} | {type: 'resistance', from?: number, strength: number}
+ *   | {type: 'weapon', start: number, end: number, strength: number}
+ *   | {type: 'vibration', from?: number, amplitude: number, frequency: number}} TriggerEffect
+ */
+
 const TRIGGER_MASKS = {l2: 1, r2: 2, both: 3};
+const fraction = value => value >= 0 && value <= 1;
+const zone = value => Math.round(value * 9);
+const step8 = value => Math.max(1, Math.round(value * 8));
+
+// libScePad modes and parameter bytes (host_api.hpp pad.setTriggerEffect).
+function applyTriggerEffect(call, trigger, effect) {
+  const mask = TRIGGER_MASKS[trigger];
+  if (!mask) throw new Error(`${call}: trigger must be 'l2', 'r2' or 'both', got '${trigger}'`);
+  const type = effect?.type;
+  let command;
+  if (type === 'off') command = [0];
+  else if (type === 'resistance') {
+    const {from = 0, strength} = effect;
+    if (!fraction(strength) || !fraction(from))
+      throw new RangeError(`${call}: strength and from must be 0..1, got ${strength} and ${from}`);
+    command = strength > 0 ? [1, zone(from), step8(strength)] : [0];
+  } else if (type === 'weapon') {
+    const {start, end, strength} = effect;
+    if (!fraction(start) || !fraction(end) || !(start < end) || !fraction(strength))
+      throw new RangeError(`${call}: weapon start < end and strength must be 0..1, got ${start}, ${end} and ${strength}`);
+    const from = Math.min(7, Math.max(2, zone(start)));
+    command = strength > 0 ? [2, from, Math.min(8, Math.max(from + 1, zone(end))), step8(strength)] : [0];
+  } else if (type === 'vibration') {
+    const {from = 0, amplitude, frequency} = effect;
+    if (!fraction(amplitude) || !fraction(from) || !(frequency >= 1 && frequency <= 255))
+      throw new RangeError(`${call}: vibration from and amplitude must be 0..1 and frequency 1..255 Hz, `
+        + `got ${from}, ${amplitude} and ${frequency}`);
+    command = amplitude > 0 ? [3, zone(from), step8(amplitude), Math.round(frequency)] : [0];
+  } else {
+    throw new Error(`${call}: effect type must be 'off', 'resistance', 'weapon' or 'vibration', got '${type}'`);
+  }
+  host().pad.setTriggerEffect(mask, ...command);
+}
+
+const pad = gamepadSource(() => host().pad.state());
 
 function sameState(a, b) {
   return a.connected === b.connected && a.leftX === b.leftX && a.leftY === b.leftY
@@ -145,20 +217,37 @@ function sameState(a, b) {
 }
 
 /**
- * Polls the controller while mounted and re-renders only when the state changes.
+ * The controller state while mounted, read once per frame (with the events' shared reader); re-renders
+ * only when it changes. `intervalMs` reads at most that often instead of every frame.
  * @param {number} [intervalMs]
  * @returns {GamepadState}
  */
-export function useGamepad(intervalMs = 16) {
+export function useGamepad(intervalMs = 0) {
   const [state, setState] = useState(Controller.getState);
   useEffect(() => {
-    const id = setInterval(() => {
-      const next = Controller.getState();
+    let waited = intervalMs;
+    return pad.watch((next, events, elapsedMs) => {
+      waited += elapsedMs;
+      if (waited < intervalMs) return;
+      waited = 0;
       setState(previous => (sameState(previous, next) ? previous : next));
-    }, intervalMs);
-    return () => clearInterval(id);
+    });
   }, [intervalMs]);
   return state;
+}
+
+/**
+ * Controller.subscribe while mounted, for the latest `handler`; pass null to stop listening (a button
+ * held when listening starts again is not a press).
+ * @param {((event: ControllerEvent) => void) | null | undefined} handler
+ * @param {{frames?: boolean}} [options]
+ */
+export function useControllerEvents(handler, {frames = false} = {}) {
+  const current = useRef(handler);
+  useLayoutEffect(() => { current.current = handler; });
+  const listening = Boolean(handler);
+  useLayoutEffect(() => (listening ? Controller.subscribe(event => current.current?.(event), {frames}) : undefined),
+    [listening, frames]);
 }
 
 /**

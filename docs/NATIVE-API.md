@@ -17,7 +17,7 @@ Controller.setLightBar('#38bdf8');
 ## Contract
 
 The modules in `runtime/js/native.js` wrap `globalThis.__ps5ReactNative`, which
-each host installs before the bundle runs. Its exact shape (ABI v11) is
+each host installs before the bundle runs. Its exact shape (ABI v12) is
 documented in [`native/shared/host_api.hpp`](../native/shared/host_api.hpp).
 `native/shared/host_api.cpp` implements the filesystem with POSIX and the object
 itself; `native/ps5/` and `native/desktop/` implement the platform functions.
@@ -204,8 +204,21 @@ subMessage follows the message on a second line.
 | `setLightBar(color)` | `'#rrggbb'` or `{r, g, b}` with 0–255 channels |
 | `resetLightBar()` | Restores the system color |
 | `vibrate(strength = 1, ms = 200)` | `strength` 0–1 |
-| `setTriggerResistance(trigger, strength, from = 0)` | ABI v8. DualSense adaptive trigger resistance on `'l2'`, `'r2'` or `'both'`: from `from` of the travel (0 top, 1 bottom) on, at `strength` 0–1 in eight steps; `strength` 0 releases it. The PS5 releases the triggers when the app quits; the desktop preview logs the request without sending it |
+| `setTriggerEffect(trigger, effect)` | ABI v12. A DualSense adaptive trigger effect on `'l2'`, `'r2'` or `'both'`, replacing the last one; effects below. The PS5 turns the triggers off when the app quits; the desktop preview logs the request without sending it |
+| `setTriggerResistance(trigger, strength, from = 0)` | `setTriggerEffect(trigger, {type: 'resistance', from, strength})` |
 | `getState()` | `GamepadState`, the latest polled state |
+| `subscribe(listener, {frames = false})` | Calls `listener(event)` once per frame with the controller's events, below; returns the function that stops it |
+
+Trigger effects take positions as fractions of the travel (0 top, 1 bottom) and
+strengths 0–1 in the controller's eight steps, where 0 turns the effect off. An
+invalid effect throws a `RangeError` naming the field:
+
+| Effect | Feel |
+| --- | --- |
+| `{type: 'off'}` | A free trigger |
+| `{type: 'resistance', from = 0, strength}` | Pushes back from `from` to the bottom (libScePad mode 1, feedback) |
+| `{type: 'weapon', start, end, strength}` | Resists between `start` and `end`, then gives way with a click, like a gun trigger (mode 2). The controller places them in tenths of the travel: `start` lands in 0.2–0.8 and `end` at least a tenth past it, at most 0.9 |
+| `{type: 'vibration', from = 0, amplitude, frequency}` | Buzzes from `from` on, at `frequency` Hz, 1–255 (mode 3) |
 
 `GamepadState` is:
 
@@ -223,8 +236,40 @@ subMessage follows the message on a second line.
 The host updates the state once per frame, before JavaScript timers and
 controller actions run.
 
-`useGamepad(intervalMs = 16)` polls `getState()` while the component is mounted
-and re-renders only when the state changes:
+### Controller events
+
+`useControllerEvents(handler, {frames = false})` (or `Controller.subscribe`) diffs
+the state once per frame, in the frame callback that steps motion, and calls the
+handler for each change: what an action cannot tell, such as a release, how far a
+trigger is in, or the touchpad and L3/R3, which send no action. All listeners
+share one read of the state, made only while any listens.
+
+| Event | When |
+| --- | --- |
+| `{type: 'press', button, state}` | A `GamepadState` button went down; L2 and R2 at the host's press threshold (half travel) |
+| `{type: 'release', button, heldMs, state}` | It came up, after `heldMs` of frame time |
+| `{type: 'trigger', trigger, value, previous, state}` | `'l2'` or `'r2'` travel changed, 0–1 |
+| `{type: 'frame', elapsedMs, state}` | With `frames`, after the others every frame, for work that steps while something is held |
+
+A frame delivers releases, then presses, then trigger changes, so a release ends
+before the next press starts. A button already held when a listener starts is not
+a press for it (it may be the press that mounted the listener); its release is.
+Pass `null` as the handler to stop listening. The events are a diff of per-frame
+states: a press and release within one frame are not seen, while the host's
+actions (`useController`) still arrive.
+
+```jsx
+function SkipIntro({onSkip}) {
+  useControllerEvents(event => {
+    if (event.type === 'press' && event.button === 'touchpad') onSkip();
+  });
+  return <Text>Press the touchpad to skip</Text>;
+}
+```
+
+`useGamepad(intervalMs = 0)` reads the state on the same per-frame reader while
+the component is mounted (at most once per `intervalMs` when given) and
+re-renders only when it changes:
 
 ```jsx
 function Sticks() {
@@ -236,8 +281,8 @@ function Sticks() {
 Menus use focus navigation ([NAVIGATION.md](NAVIGATION.md)). `useController`
 receives the raw `up`, `down`, `left`, `right`, `confirm`, `back`, `l1`, `r1`,
 `l2`, `r2`, `triangle`, and `square` actions (plus `previous`/`next` for
-compatibility); `useGamepad` is for raw analog and
-button state. Options exits through the host, unless `app.json` has `"optionsButton": "app"`: then
+compatibility); `useControllerEvents` is for releases, holds and analog travel,
+and `useGamepad` for drawing raw state. Options exits through the host, unless `app.json` has `"optionsButton": "app"`: then
 it arrives as the `options` action ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v5)).
 
 ## Sound
@@ -369,8 +414,12 @@ desktop preview runs itself again.
   `LANG` (`pt_BR.UTF-8` reads `pt-BR`); `null` for the `C`/`POSIX` locale.
 - `openURL` opens the URL in the default macOS browser.
 - With an SDL game controller connected, the light bar and rumble use it;
-  otherwise the calls print a `[pad]` line. Without a controller, `getState()`
-  reports `connected: false` and neutral values.
+  otherwise the calls print a `[pad]` line. Trigger effects always print one.
+  Without a controller, `getState()` reports `connected: false`, with the keys'
+  buttons and travel ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v4)):
+  Z and C are L2 and R2 at full travel, or 0.4 with Shift, and P the touchpad.
+- Tools hold buttons and set trigger travel with the control channel's `hold`,
+  `release` and `trigger` (`tools/ps5_drive.py`) or the same input-script steps.
 - Sounds play through SDL's default output. `SDL_AUDIODRIVER=dummy` keeps the
   preview silent; the self-test sets it.
 

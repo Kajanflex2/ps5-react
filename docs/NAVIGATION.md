@@ -101,6 +101,14 @@ frames.
 | `l2`, `r2` | Z, C | L2, R2 (past half travel on the desktop) |
 | `triangle`, `square` | T, F | Triangle, Square |
 | `options` with `"optionsButton": "app"`, otherwise exit (handled by the host) | Escape, controller Start | Options |
+| None: `touchpad` in `Controller.getState()` and [controller events](NATIVE-API.md#controller-events) only | P | Touchpad click |
+
+The keys also hold their buttons in `Controller.getState()`, as a controller's
+would. Z and C are L2 and R2 at full travel; with Shift down they are a light
+press, 0.4 of the travel, short of the half-travel press, so a key held while
+Shift goes down and up eases the trigger off and back in. On the desktop the
+`l2` and `r2` actions fire as the travel crosses half, from a key or a
+controller, and re-arm below a quarter.
 
 ## Touchpad
 

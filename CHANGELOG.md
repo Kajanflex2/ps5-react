@@ -12,6 +12,28 @@
 - `useFocus().focusedRect()`: the focused element's rectangle on screen, to place a menu beside it.
 - Input scripts and `ps5_drive.py script` take `swipe:DIRECTION:TRAVEL`.
 
+## Unreleased — controller events and trigger effects
+
+- Add `useControllerEvents(handler)` and `Controller.subscribe(listener)`: once per frame, from one
+  shared read of the controller state, `press` and `release` (with `heldMs`) for every
+  `GamepadState` button, L2/R2 at the host's half-travel press and the touchpad included, and
+  `trigger` when L2's or R2's travel changes; `{frames: true}` adds a `frame` event for work that
+  steps while something is held. Apps no longer poll `getState()` on a timer to see a release or
+  a trigger's depth. `useGamepad` reads on the same per-frame reader instead of a 16 ms timer;
+  `intervalMs` now defaults to every frame and, when given, throttles by frame time.
+- Add `Controller.setTriggerEffect(trigger, effect)` (native ABI v12, `pad.setTriggerEffect`, which
+  replaces `pad.setTriggerResistance`): `off`, `resistance`, `weapon` (resists over part of the
+  travel, then gives way) and `vibration`, through the generalized `Pad::set_trigger_effect` of
+  `patches/platform-trigger-effect.patch`. `setTriggerResistance` is now a wrapper for
+  `resistance`. The PS5 host logs each mode's first `scePadSetTriggerEffect` result. The PS5 host
+  builds; neither the new modes nor the events have been run on a PS5 yet.
+- The desktop preview puts every key's button into `Controller.getState()`, not only the first
+  six: Z and C hold L2 and R2 at full travel, or a light 0.4 with Shift, and fire `l2`/`r2` as the
+  travel crosses half, like an analog trigger; P is the touchpad.
+- Tools hold buttons and set trigger travel: `ps5_drive.py hold BUTTON [ms]`, `release BUTTON` and
+  `trigger l2|r2 VALUE [ms]`, and the input-script steps `hold:`, `release:` and `trigger:` on both
+  hosts. A held button with an action dispatches it as it goes down.
+
 ## Unreleased — Options for apps
 
 - `"optionsButton": "app"` in `app.json` hands Options (Escape and a controller's Start on the

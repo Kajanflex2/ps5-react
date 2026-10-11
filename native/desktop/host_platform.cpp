@@ -177,8 +177,11 @@ void vibrate(float strength, float seconds) {
     std::printf("[pad] vibrate %.2f for %.2fs (no controller rumble)\n", strength, seconds);
 }
 // SDL2 can send DualSense trigger effects only as raw report bytes; the preview logs the request instead.
-void set_trigger_resistance(unsigned mask, int position, int strength) {
-  std::printf("[pad] trigger resistance mask=%u from %d at %d (not sent on desktop)\n", mask, position, strength);
+void set_trigger_effect(unsigned mask, int mode, const std::uint8_t* params, std::size_t count) {
+  static constexpr const char* kModes[] = {"off", "feedback", "weapon", "vibration"};
+  std::printf("[pad] trigger effect mask=%u %s", mask, kModes[mode]);
+  for (std::size_t i = 0; i < count; ++i) std::printf(" %d", params[i]);
+  std::puts(" (not sent on desktop)");
 }
 // SDL keeps the display awake while a window is open; keepAwake(false) lets it sleep.
 void keep_awake(bool enabled) {

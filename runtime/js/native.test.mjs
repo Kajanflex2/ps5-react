@@ -161,17 +161,63 @@ test('image listener commits are measured individually despite the frame batcher
   }
 });
 
-test('Controller.setTriggerResistance maps 0..1 onto the DualSense zones and steps', () => {
+test('Controller trigger effects map 0..1 onto the DualSense zones and steps', () => {
   const calls = [];
-  globalThis.__ps5ReactNative = {pad: {setTriggerResistance: (...args) => calls.push(args)}};
+  globalThis.__ps5ReactNative = {pad: {setTriggerEffect: (...args) => calls.push(args)}};
   try {
     Controller.setTriggerResistance('l2', 0.75, 0.5);
     Controller.setTriggerResistance('both', 0.01);
     Controller.setTriggerResistance('r2', 0);
-    assert.deepEqual(calls, [[1, 5, 6], [3, 0, 1], [2, 0, 0]], 'a weak resistance is one step, not off');
-    assert.throws(() => Controller.setTriggerResistance('l1', 1), /trigger must be/);
+    assert.deepEqual(calls.splice(0), [[1, 1, 5, 6], [3, 1, 0, 1], [2, 0]], 'a weak resistance is one step, not off');
+    Controller.setTriggerEffect('r2', {type: 'weapon', start: 0.25, end: 0.75, strength: 0.75});
+    Controller.setTriggerEffect('r2', {type: 'weapon', start: 0, end: 0.05, strength: 1});
+    Controller.setTriggerEffect('both', {type: 'weapon', start: 0.9, end: 1, strength: 0.5});
+    Controller.setTriggerEffect('l2', {type: 'vibration', amplitude: 0.5, frequency: 40.4});
+    Controller.setTriggerEffect('l2', {type: 'vibration', from: 1, amplitude: 0, frequency: 40});
+    Controller.setTriggerEffect('both', {type: 'off'});
+    assert.deepEqual(calls, [
+      [2, 2, 2, 7, 6],
+      [2, 2, 2, 3, 8], // zones the controller accepts: start 2..7, end start+1..8
+      [3, 2, 7, 8, 4],
+      [1, 3, 0, 4, 40],
+      [1, 0],
+      [3, 0],
+    ]);
+    assert.throws(() => Controller.setTriggerResistance('l1', 1), /setTriggerResistance: trigger must be/);
     assert.throws(() => Controller.setTriggerResistance('l2', 2), /must be 0\.\.1/);
     assert.throws(() => Controller.setTriggerResistance('l2', 0.5, NaN), /must be 0\.\.1/);
+    assert.throws(() => Controller.setTriggerEffect('l2', {type: 'click'}), /setTriggerEffect: effect type must be/);
+    assert.throws(() => Controller.setTriggerEffect('l2'), /effect type must be/);
+    assert.throws(() => Controller.setTriggerEffect('l2', {type: 'weapon', start: 0.6, end: 0.4, strength: 1}), /start < end/);
+    assert.throws(() => Controller.setTriggerEffect('l2', {type: 'vibration', amplitude: 1, frequency: 0}), /1\.\.255 Hz/);
+    assert.throws(() => Controller.setTriggerEffect('l2', {type: 'resistance'}), /must be 0\.\.1/);
+  } finally {
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('Controller.subscribe reads the pad once a frame for every listener and stops with the last', () => {
+  let reads = 0;
+  let state = {connected: true, leftX: 0, leftY: 0, rightX: 0, rightY: 0, l2: 0, r2: 0, buttons: []};
+  globalThis.__ps5ReactNative = {pad: {state: () => { reads++; return state; }}};
+  try {
+    const a = [], b = [];
+    const stopA = Controller.subscribe(event => a.push(event.type === 'trigger' ? `${event.trigger}=${event.value}` : `${event.type} ${event.button}`));
+    const stopB = Controller.subscribe(event => b.push(event.type), {frames: true});
+    reads = 0;
+    state = {...state, r2: 0.7, buttons: ['r2', 'touchpad']};
+    globalThis.__ps5ReactFrame(16);
+    assert.equal(reads, 1, 'one read a frame, shared');
+    assert.deepEqual(a, ['press r2', 'press touchpad', 'r2=0.7']);
+    assert.deepEqual(b, ['press', 'press', 'trigger', 'frame']);
+    stopA();
+    stopA();
+    globalThis.__ps5ReactFrame(16);
+    assert.deepEqual(b.slice(4), ['frame']);
+    stopB();
+    reads = 0;
+    globalThis.__ps5ReactFrame(16);
+    assert.equal(reads, 0, 'no listener, no frame work');
   } finally {
     delete globalThis.__ps5ReactNative;
   }
