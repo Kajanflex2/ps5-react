@@ -24,6 +24,9 @@
 
 - The glyph cache unlinked its oldest glyph from the wrong end of its recently-used list, so
   evicting it once the cache was full left the freed glyph listed as the oldest.
+- `<Video resizeMode="contain">` left its letterbox bars undrawn, so layers under the element (a
+  page's backdrop) showed through them on screen. The presenter now paints the bars black. `shot:`
+  screenshots already composited them black, which hid it.
 
 ## Unreleased — video upscalers
 

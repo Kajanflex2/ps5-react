@@ -21,7 +21,7 @@
 namespace {
 const char* vertex_source = R"(#version 410 core
 uniform vec4 dst;   // framebuffer pixels: x0 y0 x1 y1
-uniform vec4 src;   // the part of the picture drawn, 0..1: x0 y0 x1 y1
+uniform vec4 src;   // the part of the picture drawn, 0..1: x0 y0 x1 y1; beyond it, `contain`'s black bars
 uniform vec2 size;  // the framebuffer
 out vec2 at;
 void main() {
@@ -70,6 +70,12 @@ void finish_rgb(vec3 rgb) {
   color = vec4(clamp(rgb, 0.0, 1.0), 1.0) * alpha;
 }
 void finish(vec3 yuv) { finish_rgb(matrix * ((yuv - offset) * gain)); }
+// Paints a letterbox bar: true where `at` lies outside the picture.
+bool bar(vec2 at) {
+  if (all(greaterThanEqual(at, vec2(0.0))) && all(lessThanEqual(at, vec2(1.0)))) return false;
+  color = vec4(0.0, 0.0, 0.0, alpha);
+  return true;
+}
 )";
 
 const char* texture_fragment = R"(#version 410 core
@@ -80,6 +86,7 @@ uniform float scale;     // 10-bit samples low in 16-bit words: 65535 / 1023
 )";
 const char* texture_main = R"(
 void main() {
+  if (bar(at)) return;
   float y = texture(plane0, at).r;
   vec2 c = interleaved == 1 ? texture(plane1, at).rg : vec2(texture(plane1, at).r, texture(plane2, at).r);
   finish(vec3(y, c) * scale);
@@ -123,6 +130,7 @@ in vec2 at;
 uniform int upscaled;    // 1: the luma from `upscaled_plane`; 2: the picture from it, as R'G'B'
 uniform sampler2D upscaled_plane;
 void main() {
+  if (bar(at)) return;
   if (upscaled == 2) {
     finish_rgb(texture(upscaled_plane, at).rgb);
     return;
@@ -459,7 +467,8 @@ void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const T
   if (!frame.planes[0] || frame.width <= 0 || frame.height <= 0) return;
   Entry& e = entry(id);
   e.drawn = true;
-  // The picture's shape, fitted into the element's box.
+  // The picture's shape, fitted into the element's box. `contain` still draws the whole box, its bars
+  // black, so nothing under the element shows through them.
   const float bw = float(target.x1 - target.x0), bh = float(target.y1 - target.y0);
   if (bw <= 0 || bh <= 0) return;
   const float picture = frame.width * frame.aspect / frame.height, box = bw / bh;
@@ -467,13 +476,13 @@ void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const T
   float sx0 = 0, sy0 = 0, sx1 = 1, sy1 = 1;
   if (fit == Fit::contain) {
     if (picture > box) {
-      const float hh = bw / picture;
-      dy0 = target.y0 + (bh - hh) / 2;
-      dy1 = dy0 + hh;
+      const float part = picture / box;
+      sy0 = 0.5f - part / 2;
+      sy1 = 0.5f + part / 2;
     } else {
-      const float ww = bh * picture;
-      dx0 = target.x0 + (bw - ww) / 2;
-      dx1 = dx0 + ww;
+      const float part = box / picture;
+      sx0 = 0.5f - part / 2;
+      sx1 = 0.5f + part / 2;
     }
   } else if (fit == Fit::cover) {
     if (picture > box) {
