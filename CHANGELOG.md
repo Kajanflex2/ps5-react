@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — removal off the render thread
+
+- `FileSystem.removeAsync(path)` removes a file, or a directory and everything in it, on a worker
+  thread and returns a promise: a path already gone resolves, a failure rejects with the path and the
+  system error. On a tester's console, `fs.remove` of a large download held the screen for 5 s.
+
 ## Unreleased — extracted file permissions
 
 - Archives extracted in the app (ZIP, 7z, TAR, and RAR when rar-extract cannot start) write folders
