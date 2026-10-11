@@ -10,13 +10,13 @@ import {createCompiler} from './compile.mjs';
 
 const LOADERS = {'.js': 'jsx', '.jsx': 'jsx', '.mjs': 'jsx', '.ts': 'ts', '.tsx': 'tsx'};
 
-export async function loadCompiler(appDir) {
-  const app = JSON.parse(readFileSync(resolve(appDir, 'app.json'), 'utf8'));
+/** `render` is the {width, height} of the layout being built; an app may be built for several. */
+export async function loadCompiler(appDir, render) {
   const configPath = resolve(appDir, 'tailwind.config.js');
   const config = existsSync(configPath)
     ? (await import(`${pathToFileURL(configPath).href}?t=${Date.now()}`)).default ?? {}
     : {};
-  return createCompiler({config, renderWidth: app.render.width, renderHeight: app.render.height, appDir});
+  return createCompiler({config, renderWidth: render.width, renderHeight: render.height, appDir});
 }
 
 /** Babel transform of one source; throws TailwindError with a location on a bad class. */
@@ -34,12 +34,12 @@ export function transform(babel, compiler, source, filename) {
 }
 
 /** `babel` is {core, syntaxJsx}, resolved from the Embedded React toolchain. */
-export function tailwindEsbuildPlugin({appDir, babel}) {
+export function tailwindEsbuildPlugin({appDir, render, babel}) {
   const root = resolve(appDir) + sep;
   return {
     name: 'ps5-react-tailwind',
     async setup(build) {
-      const compiler = await loadCompiler(appDir);
+      const compiler = await loadCompiler(appDir, render);
       build.onLoad({filter: /\.(m?jsx?|tsx?)$/}, args => {
         if (!args.path.startsWith(root) || args.path.includes(`${sep}node_modules${sep}`)) return;
         const source = readFileSync(args.path, 'utf8');

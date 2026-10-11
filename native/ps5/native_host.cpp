@@ -30,6 +30,8 @@
 #include "screenshot.hpp"
 #include "text_shaper.hpp"
 #include "video_api.hpp"
+#include "layouts.h"
+#include "video_output.hpp"
 #include "video_frame.hpp"
 #include "filesystem_access.hpp"
 #include <unistd.h>
@@ -54,13 +56,10 @@ extern "C" {
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "software_backend.h"
-void er_register_assets(void);
 std::uint64_t sceKernelReadTsc(void);
 std::uint64_t sceKernelGetTscFrequency(void);
 void hui_heap_capacity(std::size_t* size, std::size_t* flexible_before, std::size_t* flexible_after);
 void hui_heap_stats(std::size_t* live_bytes, std::size_t* peak_bytes, std::size_t* blocks, std::size_t* failures);
-extern const char proof_bundle[];
-extern const unsigned long proof_bundle_length;
 }
 
 // Extraction steps go to the console log, so the crash log keeps the last one before a fault.
@@ -122,10 +121,19 @@ std::string dev_path(const char* name) {
   return host::resolve_path((std::string("/app0/dev/") + name).c_str(), path, sizeof path) ? path : "";
 }
 
-constexpr int width = PS5_REACT_WIDTH, height = PS5_REACT_HEIGHT;
 constexpr std::int64_t duration_us = static_cast<std::int64_t>(PS5_REACT_TIMEOUT) * 1000000;
 
 void react_log(const char* line) { async_log::write("[REACT] %s", line); }
+
+// The smallest layout at least as tall as the console's output, else the largest. An unreadable
+// output picks the smallest.
+const Ps5ReactLayout& choose_layout() {
+  if (ps5_react_layout_count == 1) return ps5_react_layouts[0];
+  const int lines = video_output::output_lines();
+  for (unsigned i = 0; i < ps5_react_layout_count; ++i)
+    if (ps5_react_layouts[i].height >= lines) return ps5_react_layouts[i];
+  return ps5_react_layouts[ps5_react_layout_count - 1];
+}
 
 // An app folder may carry dev/input-script.txt (InputScript syntax) for unattended profiling; it is
 // never part of a build, only added to a test deploy.
@@ -260,13 +268,13 @@ bool dispatch(const char* action) {
 // Display.setRefreshRate: the rate can change only while EGL is terminated (ps5_opengl_display_modes.h),
 // so the presenter's GL objects go with the context and are made again. The engine framebuffer is CPU
 // memory and survives; the presenter's first draw uploads all of it.
-bool switch_refresh_rate(hui::ps5::Display& display, GlPresenter& presenter, int hz) {
+bool switch_refresh_rate(hui::ps5::Display& display, GlPresenter& presenter, const Ps5ReactLayout& layout, int hz) {
   const std::int64_t start = hui::sys::monotonic_us();
   presenter.release();
   display.close();
   if (!eglSetDisplayRefreshPS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), hz))
     async_log::write("[PS5-REACT] refresh %d Hz refused: 0x%x", hz, eglGetError());
-  const bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT) && presenter.init(width, height);
+  const bool ok = display.open(layout.surface_width, layout.surface_height) && presenter.init(layout.width, layout.height);
   async_log::write("[PS5-REACT] refresh switch to %d Hz ok=%d in %lldms", hz, ok,
                    static_cast<long long>((hui::sys::monotonic_us() - start) / 1000));
   return ok;
@@ -286,7 +294,9 @@ bool run_proof() {
   // Accepted only before Display::open initializes EGL. A display without 120 Hz stays at 60.
   if (PS5_REACT_REFRESH_RATE != 60 && !eglSetDisplayRefreshPS5(eglGetDisplay(EGL_DEFAULT_DISPLAY), PS5_REACT_REFRESH_RATE))
     async_log::write("[PS5-REACT] refresh %d Hz refused: 0x%x", PS5_REACT_REFRESH_RATE, eglGetError());
-  bool ok = display.open(PS5_REACT_SURFACE_WIDTH, PS5_REACT_SURFACE_HEIGHT);
+  const Ps5ReactLayout& layout = choose_layout();
+  const int width = layout.width, height = layout.height;
+  bool ok = display.open(layout.surface_width, layout.surface_height);
   async_log::write("[PS5-REACT] display=%d at %lldms", ok, since_launch_ms());
   if (ok) {
     ok = presenter.init(width, height);
@@ -364,11 +374,11 @@ bool run_proof() {
     }
   }
   if (ok) {
-    er_register_assets();
+    layout.register_assets();
     char fonts[256];
     if (host::resolve_path("/app0/fonts", fonts, sizeof fonts))
       text_shaper::install(fonts, [](const char* line) { async_log::write("[PS5-REACT] %s", line); });
-    ok = er_runtime_load_source(proof_bundle, proof_bundle_length, "app.jsx.bundle");
+    ok = er_runtime_load_source(layout.bundle, layout.bundle_length, "app.jsx.bundle");
     async_log::write("[PS5-REACT] bundle=%d gc_accounting=%d at %lldms", ok, er_runtime_gc_accounting_ok(), since_launch_ms());
   }
   if (ok) {
@@ -542,7 +552,7 @@ bool run_proof() {
       if (const char* line = stats.end_frame(slow_frame_us)) async_log::write("[PS5-REACT] %s", line);
       if (ps5_react_exit_requested()) break;
       if (const int hz = ps5_react_take_refresh_request()) {
-        ok = switch_refresh_rate(display, presenter, hz);
+        ok = switch_refresh_rate(display, presenter, layout, hz);
         refresh_hz = hz;
         mode_known = false;
         // Nor is the reopen itself.

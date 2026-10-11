@@ -16,7 +16,7 @@ import urllib.request
 import zipfile
 
 from rar_worker import build as build_rar_worker, unrar_source
-from common import resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image, refresh_rate_mask
+from common import layouts, layout_directory, resource_files, ROOT, DEPS, LOCK, run, digest, verify, fetch, app_files, bundle, dependency, stb_image, refresh_rate_mask
 from network_ports import ports, copy_notices
 import ffmpeg
 from text_fonts import harfbuzz, sheenbidi
@@ -124,23 +124,35 @@ def main():
     run(["cmake", "--build", cross, "--target", "er-bridge-quickjs", "er-software", "-j", "6"],
         env=env, log=BUILD / "runtime-build.log")
 
-    js_bundle = (generated / "app.bundle.js").read_bytes()
-    bundle_c = BUILD / "bundle.c"
-    bundle_c.write_text("const char proof_bundle[] = {" + ",".join(str(x) for x in js_bundle) +
-                        ",0};\nconst unsigned long proof_bundle_length = " + str(len(js_bundle)) + ";\n")
+    # native/ps5/layouts.h: each layout's bundle, and its baked assets under their own register function.
+    app_layouts = layouts(config)
+    layout_dirs = [layout_directory(generated, layout) for layout in app_layouts]
+    layouts_c = BUILD / "layouts.c"
+    table = ['#include "layouts.h"']
+    for i, directory in enumerate(layout_dirs):
+        js_bundle = (directory / "app.bundle.js").read_bytes()
+        table += [f"void ps5_react_register_assets_{i}(void);",
+                  f"static const char bundle_{i}[] = {{" + ",".join(str(x) for x in js_bundle) + ",0};"]
+    table += ["const Ps5ReactLayout ps5_react_layouts[] = {" + ",".join(
+                  f"{{{w}, {h}, {sw}, {sh}, bundle_{i}, sizeof bundle_{i} - 1, ps5_react_register_assets_{i}}}"
+                  for i, (w, h, sw, sh) in enumerate(app_layouts)) + "};",
+              f"const unsigned ps5_react_layout_count = {len(app_layouts)};", ""]
+    layouts_c.write_text("\n".join(table))
+    layout_assets = {directory / "assets.generated.c": [f"-Der_register_assets=ps5_react_register_assets_{i}"]
+                     for i, directory in enumerate(layout_dirs)}
     definitions = next(line.split("=", 1)[1] for line in
                        (cross / "bridge/engine/CMakeFiles/embedded-react.dir/flags.make").read_text().splitlines()
                        if line.startswith("C_DEFINES ="))
-    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/async_log.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/time_compat.c", ROOT / "native/ps5/archive_compat.c",
+    sources = [ROOT / "native/ps5/native_host.cpp", ROOT / "native/ps5/async_log.cpp", ROOT / "native/ps5/host_platform.cpp", ROOT / "native/ps5/video_output.cpp", ROOT / "native/ps5/time_compat.c", ROOT / "native/ps5/archive_compat.c",
                ROOT / "native/ps5/filesystem_access.cpp",
                ROOT / "native/ps5/elevation_transport.cpp",
                ROOT / "native/shared/host_api.cpp", ROOT / "native/shared/network.cpp",
                ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_writer.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/browser_capture_api.cpp", ROOT / "native/shared/lan.cpp", ROOT / "native/shared/lan_api.cpp", ROOT / "native/ps5/browser_capture.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
-               ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
+               ROOT / "native/shared/sound_api.cpp", layout_dirs[0] / "sounds.generated.c",
                ROOT / "native/shared/gl_presenter.cpp", ROOT / "native/shared/gl_video.cpp", ROOT / "native/shared/gl_upscale.cpp", ROOT / "native/shared/video_api.cpp",
-               ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/js_profiler.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/render_workers.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", generated / "assets.generated.c",
-               bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
+               ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/js_profiler.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/render_workers.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", *layout_assets,
+               layouts_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
                hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
                native / "app_crt.cpp", native / "app_cpp_runtime.cpp"]
     hb = harfbuzz() / "src"
@@ -186,7 +198,7 @@ def main():
             flags = flags + ["-DHUI_HEAP_RESERVE=(448u * 1024u * 1024u)"]
         warnings = (["-w", "-DHB_TINY", "-DHB_HAS_RASTER"] if source in harfbuzz_sources else
                     ["-w", "-DSB_CONFIG_UNITY"] if source.name == "SheenBidi.c" else ["-Wall", "-Wextra", "-Werror"])
-        run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", *warnings,
+        run(["sh", hui / "tooling/prospero-clang18", *flags, "-O2", *warnings, *layout_assets.get(source, []),
              "-DPROSPERO=1", "-DGL_GLEXT_PROTOTYPES=1", *shlex.split(definitions),
              *[flag for path in includes for flag in ("-I", path)], "-c", source, "-o", obj],
             env=env, log=BUILD / (f"compile-{i}.log"))
@@ -330,7 +342,7 @@ def main():
     run([host_tool, "self", "--inspect", "--file", app / "sce_module/libc.prx"])
     receipts = {"title": TITLE, "app": app_dir.name, "framework_version": "0.1.0",
                 "hardware_tested": False, "dependencies": LOCK,
-                "config": config, "bundle_sha256": digest(generated / "app.bundle.js"),
+                "config": config, "bundle_sha256": {d.name: digest(d / "app.bundle.js") for d in layout_dirs},
                 "llvm_version": subprocess.check_output([llvm / "clang", "--version"], text=True).splitlines()[0],
                 "sdk_root": str(sdk),
                 "network_libraries": {p.name: digest(p) for p in network_libs},

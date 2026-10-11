@@ -7,8 +7,6 @@
     "contentId",
     "name",
     "version",
-    "render",
-    "surface",
     "timeoutSeconds"
   ],
   "properties": {
@@ -99,6 +97,10 @@
       "minItems": 1,
       "description": "Rates Display.setRefreshRate may switch to while the app runs; must include refreshRate. Defaults to refreshRate alone."
     },
+    "resolution": {
+      "const": "auto",
+      "description": "Instead of render and surface: build 1920x1080 and 3840x2160 layouts and pick the one matching the console's output at launch (1440p uses 3840x2160)."
+    },
     "filesystemAccess": {
       "type": "string",
       "enum": [
@@ -166,6 +168,40 @@
           }
         }
       }
+    },
+    {
+      "oneOf": [
+        {
+          "required": [
+            "render",
+            "surface"
+          ],
+          "not": {
+            "required": [
+              "resolution"
+            ]
+          }
+        },
+        {
+          "required": [
+            "resolution"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "render"
+                ]
+              },
+              {
+                "required": [
+                  "surface"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     }
   ]
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — resolution auto
+
+- `"resolution": "auto"` in `app.json` builds an app at 1920×1080 and 3840×2160, and the title picks
+  the layout matching the console's video output at launch (4K and 1440p get 3840×2160). The output
+  mode comes from `sceVideoOutGetCurrentOutputMode_` on the main AvSetting bus. Generated bundles and
+  assets moved to `.build/<app>/generated/<width>x<height>/`, and `--resolution 1080p` previews the
+  small layout.
+
 ## Unreleased — runtime refresh rate
 
 - Add `Display.refreshRate()` and `Display.setRefreshRate(hz)` (native ABI v11): an app switches

@@ -455,12 +455,12 @@ separated by commas or whitespace: an action (`up`, `down`, `left`, `right`, `co
 preview, and `shot:NAME` saves the frame on screen (letters, digits, `_`
 and `-`; see [Screenshots](#screenshots)). `PS5_REACT_SLOW_FRAME_MS` changes the slow-frame threshold. Each
 action is echoed as a `script:` line, so the log reads as a timeline. Run the
-preview binary directly to set them:
+preview binary directly, with the bundle of the layout it was built for, to set them:
 
 ```sh
 PS5_REACT_SANDBOX=.build/my-app/sandbox PS5_REACT_SLOW_FRAME_MS=20 \
 PS5_REACT_INPUT_SCRIPT="wait:3000,right*3,wait:1500,confirm,wait:2000,back,wait:2000,quit" \
-  .build/my-app/desktop/ps5-react-preview .build/my-app/generated/app.bundle.js
+  .build/my-app/desktop/ps5-react-preview .build/my-app/generated/3840x2160/app.bundle.js
 ```
 
 The variables have no effect on `--self-test`.

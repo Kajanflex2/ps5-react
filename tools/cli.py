@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from common import ROOT, app_config, app_files, bundle, dependency, run, stb_image
+from common import ROOT, app_config, app_files, bundle, dependency, layout_directory, layouts, run, stb_image
 from rar_worker import build_host
 from text_fonts import harfbuzz, sheenbidi
 import ffmpeg
@@ -34,19 +34,30 @@ def preview_env(app):
     return {**os.environ, "PS5_REACT_SANDBOX": str(sandbox(app))}
 
 
-def desktop(app, test=False, target="ps5-react-preview"):
+def preview_layout(config, resolution=None):
+    """The layout a preview shows: `resolution` ("1080p", "2160p") picks one of an auto app's."""
+    candidates = layouts(config)
+    if resolution is None: return candidates[-1]
+    if config.get("resolution") != "auto": raise ValueError('--resolution needs an app with "resolution": "auto"')
+    return next(layout for layout in candidates if f"{layout[1]}p" == resolution)
+
+
+def desktop(app, test=False, target="ps5-react-preview", resolution=None):
     er = dependency("embeddedReact")
-    _, _, generated = bundle(app, er)
+    _, config, generated = bundle(app, er)
+    layout = preview_layout(config, resolution)
+    directory = layout_directory(generated, layout)
     build = ROOT / ".build" / app.name / "desktop"
     quickjs = dependency("quickjsSource")
     hui = dependency("platform")
     run(["cmake", "-S", ROOT / "native/desktop", "-B", build,
-         f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DSTB_IMAGE_DIR={stb_image()}", f"-DHB_ROOT={harfbuzz()}", f"-DSB_ROOT={sheenbidi()}", f"-DFFMPEG_PREFIX={ffmpeg.desktop()}", "-DCMAKE_BUILD_TYPE=Release"],
+         f"-DER_ROOT={er}", f"-DHUI_ROOT={hui}", f"-DFETCHCONTENT_SOURCE_DIR_QUICKJS={quickjs}", f"-DAPP_GENERATED={generated}", f"-DAPP_LAYOUT={directory}",
+         f"-DAPP_LAYOUT_WIDTH={layout[0]}", f"-DAPP_LAYOUT_HEIGHT={layout[1]}", f"-DSTB_IMAGE_DIR={stb_image()}", f"-DHB_ROOT={harfbuzz()}", f"-DSB_ROOT={sheenbidi()}", f"-DFFMPEG_PREFIX={ffmpeg.desktop()}", "-DCMAKE_BUILD_TYPE=Release"],
         log=build / "configure.log")
     run(["cmake", "--build", build, "--target", target, "-j", "6"], log=build / "build.log")
     # RAR sets extract in this separate program, which the preview finds beside itself.
     build_host(build / "rar-extract")
-    command = [build / "ps5-react-preview", generated / "app.bundle.js"]
+    command = [build / "ps5-react-preview", directory / "app.bundle.js"]
     if test:
         run(["node", "--test", *sorted((ROOT / "tools/tailwind").glob("*.test.mjs")),
                 *sorted((ROOT / "runtime/js/motion").glob("*.test.mjs")),
@@ -107,7 +118,7 @@ def stop_preview(process):
             process.wait()
 
 
-def watch(app, command, directory):
+def watch(app, command, directory, resolution=None):
     process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(app))
     stamp = source_stamp(app)
     print("Watching JSX/assets/config. Save to rebuild; Esc closes; Ctrl+C stops.", flush=True)
@@ -129,7 +140,7 @@ def watch(app, command, directory):
             try:
                 with open(ROOT / ".build/build.lock", "w") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX)
-                    command, directory = desktop(app)
+                    command, directory = desktop(app, resolution=resolution)
                 process = subprocess.Popen([str(x) for x in command], cwd=directory, env=preview_env(app))
                 print("Preview restarted.", flush=True)
             except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
@@ -173,6 +184,8 @@ def main():
     parser.add_argument("--dir", type=Path, help="parent directory for a new app (default: apps/)")
     parser.add_argument("--sdk", type=Path, help="use an existing public PS5 payload SDK")
     parser.add_argument("--watch", action="store_true", help="rebuild/restart desktop preview when sources change")
+    parser.add_argument("--resolution", choices=("1080p", "2160p"),
+                        help='layout a "resolution": "auto" app previews (default: 2160p)')
     args = parser.parse_args()
     if args.command == "doctor": return doctor()
     if args.command == "create":
@@ -197,10 +210,10 @@ def main():
             if sdk: cmd.extend(["--payload-sdk", sdk])
             run(cmd)
         else:
-            command, directory = desktop(app, args.command == "test")
+            command, directory = desktop(app, args.command == "test", resolution=args.resolution)
     if command:
         if args.watch and args.command == "preview":
-            watch(app, command, directory)
+            watch(app, command, directory, args.resolution)
         elif args.command == "test":
             render_worker_parity(command, directory, app)
         else:

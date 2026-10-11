@@ -175,8 +175,8 @@ PNG files in the app's `sce_sys/` go into the title's `sce_sys/`: `icon0.png`
 
 ### Application configuration
 
-`app.json` controls the title identity, display name, version, render/surface
-sizes, refresh rate and automatic exit. A configuration for the example app is:
+`app.json` controls the title identity, display name, version, display size,
+refresh rate and automatic exit. A configuration for the example app is:
 
 ```json
 {
@@ -192,7 +192,21 @@ sizes, refresh rate and automatic exit. A configuration for the example app is:
 ```
 
 The render size determines software rasterization cost and styling scale; the
-surface size is the displayed framebuffer size.
+surface size is the displayed framebuffer size. Keep them equal: different
+sizes go through a bilinear texture scale that softens text. 3840×2160 gives
+sharp text on 4K TVs; 1920×1080 costs a quarter of the rasterization and
+uploads changed rows through the faster buffer-texture path, which matters for
+apps that redraw large areas every frame.
+
+`"resolution": "auto"` replaces `render` and `surface`. The build compiles the
+app twice, at 1920×1080 and 3840×2160, and the title picks the layout matching
+the console's video output when it starts: 4K and 1440p output get 3840×2160,
+everything else 1920×1080. Classes and baked font sizes are per layout, so the
+design looks the same at either size; raw numeric `style` values are render
+pixels and do not scale. Leave `sizes` out of `assets.config.js` so each layout
+bakes the font sizes its classes use. The eboot carries both bundles and font
+sets (about 0.4 MB more for the starter). Preview the small layout with
+`npm run dev -- --resolution 1080p`.
 
 `"refreshRate": 120` asks for 120 Hz output (default 60). The display must
 accept 120 Hz at the surface size, which for 3840×2160 means HDMI 2.1;
@@ -637,6 +651,7 @@ copied hosts or edits to C++.
 | `npm run doctor` | Check the native development environment |
 | `npm run dev -- --app my-app` | Watch sources and rebuild/restart the preview |
 | `npm run preview -- --app my-app` | Run one native preview |
+| `npm run preview -- --app my-app --resolution 1080p` | Preview the 1920×1080 layout of a `"resolution": "auto"` app (default 2160p) |
 | `npm test` | Run local runtime/compiler/transport tests and starter UI checks |
 | `npm run build -- --app my-app` | Build and verify a PS5 application folder |
 | `npm run create -- --name my-app --title-id PPSA99100` | Scaffold an app |

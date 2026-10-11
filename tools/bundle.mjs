@@ -46,6 +46,8 @@ const demosDir = resolve(repoRoot, 'demos');
 const libEntry = resolve(here, 'src/embedded-react/index.js');
 const nodeModules = resolve(here, 'node_modules');
 const distDir = resolve(process.argv[4]);
+// Added by PS5 React: Tailwind classes compile for this render size.
+const render = {width: Number(process.argv[5]), height: Number(process.argv[6])};
 
 const DEFAULT_DEMO = 'thermostat';
 const demoDir = resolve(process.argv[3]);
@@ -145,7 +147,7 @@ await build({
   nodePaths: [nodeModules],
   plugins: [
     // Added by PS5 React: build-time className/tw compilation for the app's sources.
-    tailwindEsbuildPlugin({appDir: demoDir, babel: {
+    tailwindEsbuildPlugin({appDir: demoDir, render, babel: {
       core: require('@babel/core'),
       syntaxJsx: require('@babel/plugin-syntax-jsx').default,
     }}),

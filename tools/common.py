@@ -154,11 +154,19 @@ def app_config(app, config=None):
         raise ValueError("contentId needs the same titleId and exactly 16 suffix characters")
     if not re.fullmatch(r"\d{2}\.\d{3}\.\d{3}", config["version"]):
         raise ValueError("version must look like 01.000.000")
-    for field in ("render", "surface"):
-        for axis in ("width", "height"):
-            value = config[field][axis]
-            if type(value) is not int or not 1 <= value <= 3840:
-                raise ValueError(f"{field}.{axis} must be an integer between 1 and 3840")
+    if "resolution" in config:
+        if config["resolution"] != "auto":
+            raise ValueError('resolution must be "auto"')
+        if "render" in config or "surface" in config:
+            raise ValueError('resolution "auto" chooses the render and surface sizes; remove render and surface')
+    else:
+        for field in ("render", "surface"):
+            if field not in config:
+                raise ValueError(f'{field} is required unless resolution is "auto"')
+            for axis in ("width", "height"):
+                value = config[field][axis]
+                if type(value) is not int or not 1 <= value <= 3840:
+                    raise ValueError(f"{field}.{axis} must be an integer between 1 and 3840")
     refresh = config.get("refreshRate", 60)
     if type(refresh) is not int or refresh not in (60, 120):
         raise ValueError("refreshRate must be 60 or 120")
@@ -197,11 +205,26 @@ def refresh_rate_mask(config):
     return (1 if 60 in rates else 0) | (2 if 120 in rates else 0)
 
 
+# Output sizes a "resolution": "auto" app is built for, smallest first; the PS5 picks one at launch.
+AUTO_LAYOUTS = ((1920, 1080), (3840, 2160))
+
+
+def layouts(config):
+    """(render width, render height, surface width, surface height) of each layout the app is built for."""
+    if config.get("resolution") == "auto":
+        return [(width, height, width, height) for width, height in AUTO_LAYOUTS]
+    render, surface = config["render"], config["surface"]
+    return [(render["width"], render["height"], surface["width"], surface["height"])]
+
+
+def layout_directory(generated, layout):
+    """Bundle and baked assets of one layout, under the app's generated directory."""
+    return generated / f"{layout[0]}x{layout[1]}"
+
+
 def generated_config(config, directory):
     directory.mkdir(parents=True, exist_ok=True)
-    definitions = {"WIDTH": config["render"]["width"], "HEIGHT": config["render"]["height"],
-                   "SURFACE_WIDTH": config["surface"]["width"], "SURFACE_HEIGHT": config["surface"]["height"],
-                   "TIMEOUT": config["timeoutSeconds"], "REFRESH_RATE": config.get("refreshRate", 60),
+    definitions = {"TIMEOUT": config["timeoutSeconds"], "REFRESH_RATE": config.get("refreshRate", 60),
                    "REFRESH_RATES": refresh_rate_mask(config),
                    "NAME": config["name"], "TITLE": config["titleId"],
                    "CONSOLE_FILESYSTEM": int(config.get("filesystemAccess", "sandbox") == "console"),
@@ -218,7 +241,11 @@ def bundle(app, er):
     package = er / "bridges/quickjs/js"
     if not (package / "node_modules").exists():
         run(["npm", "ci", "--omit=optional"], cwd=package, log=ROOT / ".build/npm-upstream.log")
-    run(["node", ROOT / "tools/bundle.mjs", er, app, output], log=output.parent / "bundle.log")
+    for layout in layouts(config):
+        directory = layout_directory(output, layout)
+        directory.mkdir(exist_ok=True)
+        run(["node", ROOT / "tools/bundle.mjs", er, app, directory, str(layout[0]), str(layout[1])],
+            log=output.parent / f"bundle-{directory.name}.log")
     from text_fonts import text_fonts
     text_fonts(config, output / "fonts")
     return app, config, output

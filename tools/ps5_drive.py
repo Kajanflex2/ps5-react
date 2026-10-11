@@ -3,7 +3,9 @@
 # Additional attribution term: see LICENSE-ATTRIBUTION.
 """Drive a running desktop preview, as a browser automation tool drives a page.
 
-  ps5_drive.py start --app-dir <dir>    build and launch the preview with its control channel
+  ps5_drive.py start --app-dir <dir> [1080p|2160p]
+                                        build and launch the preview with its control channel; an
+                                        auto-resolution app previews the given layout (default 2160p)
   ps5_drive.py press down               up/down/left/right/confirm/back/triangle/square/l1/r1/l2/r2
   ps5_drive.py focus <focusKey>         move focus to an element by key
   ps5_drive.py shot <path.bmp> [full]  save the screen; `full` keeps the framebuffer's 2× resolution
@@ -48,12 +50,12 @@ def send(line, timeout=30):
     return b"".join(chunks).decode(errors="replace").rstrip("\n")
 
 
-def start(app):
+def start(app, resolution=None):
     stop()
     app_config(app)
     with open(ROOT / ".build/build.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        command, directory = desktop(app)
+        command, directory = desktop(app, resolution=resolution)
     env = {**preview_env(app), "PS5_REACT_CONTROL": SOCKET}
     with open(LOG, "w") as log:
         process = subprocess.Popen([str(part) for part in command], cwd=directory, env=env, stdout=log,
@@ -151,9 +153,9 @@ def main():
     if not args or args[0] in ("-h", "--help"):
         return print(__doc__)
     if args[0] == "start":
-        if len(args) != 3 or args[1] != "--app-dir":
-            raise SystemExit("Usage: ps5_drive.py start --app-dir <dir>")
-        return start(Path(args[2]).expanduser().resolve())
+        if len(args) not in (3, 4) or args[1] != "--app-dir" or args[3:] not in ([], ["1080p"], ["2160p"]):
+            raise SystemExit("Usage: ps5_drive.py start --app-dir <dir> [1080p|2160p]")
+        return start(Path(args[2]).expanduser().resolve(), *args[3:])
     if args[0] == "stop":
         return stop()
     try:
