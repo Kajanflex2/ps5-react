@@ -32,6 +32,13 @@ void sample(const ERLayer& l, int x, int y, unsigned rgb[3]) {
   }
 }
 
+// Whether (x, y) is in a rounded corner's square, which the framebuffer draws instead of the layer.
+bool in_corner(const ERLayer& l, int x, int y) {
+  const int qx = x - l.dst.x, qy = y - l.dst.y, ex = l.dst.x + l.dst.w - x, ey = l.dst.y + l.dst.h - y;
+  return (qx < l.radius_tl && qy < l.radius_tl) || (ex <= l.radius_tr && qy < l.radius_tr) ||
+         (ex <= l.radius_br && ey <= l.radius_br) || (qx < l.radius_bl && ey <= l.radius_bl);
+}
+
 // The framebuffer pixel as presented: over the layers the GPU draws beneath it.
 std::uint32_t presented(const std::uint32_t* pixels, int width, int x, int y, const ERLayer* layers, int count) {
   const std::uint32_t ui = pixels[static_cast<std::size_t>(y) * width + x];
@@ -41,6 +48,7 @@ std::uint32_t presented(const std::uint32_t* pixels, int width, int x, int y, co
     const ERLayer& l = layers[i];
     if (x < l.clip.x || y < l.clip.y || x >= l.clip.x + l.clip.w || y >= l.clip.y + l.clip.h) continue;
     if (x < l.dst.x || y < l.dst.y || x >= l.dst.x + l.dst.w || y >= l.dst.y + l.dst.h) continue;
+    if (in_corner(l, x, y)) continue;
     unsigned texel[3];
     sample(l, x, y, texel);
     for (int c = 0; c < 3; ++c) rgb[c] = (texel[c] * l.alpha + rgb[c] * (255u - l.alpha) + 127u) / 255u;

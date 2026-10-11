@@ -40,8 +40,9 @@ void main() {
 )";
 // The screen in one pass: up to four layers bottom first, then the framebuffer over them, all
 // premultiplied. `view` is the viewport showing the framebuffer; layer rects are framebuffer pixels
-// (x0 y0 x1 y1), their src rects image pixels. The first pass composites over black, opaque; more
-// layers take earlier passes, blended under the last.
+// (x0 y0 x1 y1), their src rects image pixels, their radii (tl tr br bl) the corner squares left to the
+// framebuffer. The first pass composites over black, opaque; more layers take earlier passes, blended
+// under the last.
 const char* composite_fragment_source = R"(#version 410 core
 uniform sampler2D frame;
 uniform sampler2D images[4];
@@ -55,6 +56,7 @@ uniform vec4 dst[4];
 uniform vec4 src[4];
 uniform vec2 image[4];
 uniform float alpha[4];
+uniform vec4 radii[4];
 out vec4 color;
 void main() {
   vec2 p = vec2(gl_FragCoord.x - view.x, view.y + view.w - gl_FragCoord.y) * size / view.zw;
@@ -62,6 +64,10 @@ void main() {
   for (int i = 0; i < 4; ++i) {
     if (i >= layer_count) break;
     if (any(lessThan(p, max(clip[i].xy, dst[i].xy))) || any(greaterThanEqual(p, min(clip[i].zw, dst[i].zw)))) continue;
+    vec2 q = p - dst[i].xy, e = dst[i].zw - p;
+    vec4 r = radii[i];
+    if ((q.x < r.x && q.y < r.x) || (e.x <= r.y && q.y < r.y) || (e.x <= r.z && e.y <= r.z) ||
+        (q.x < r.w && e.y <= r.w)) continue;
     vec2 at = mix(src[i].xy, src[i].zw, (p - dst[i].xy) / (dst[i].zw - dst[i].xy));
     vec4 l = textureLod(images[i], at / image[i], 0.0) * alpha[i];
     c = l + c * (1.0 - l.a);
@@ -207,6 +213,8 @@ bool GlPresenter::unchanged(std::span<const ERRect> damage, std::span<const Dama
     const ERLayer& b = drawn_layers_[i].layer;
     if (drawn_layers_[i].image != (a.image ? a.image : "") || a.pixels != b.pixels || a.src_x != b.src_x ||
         a.src_y != b.src_y || a.src_w != b.src_w || a.src_h != b.src_h || a.alpha != b.alpha ||
+        a.radius_tl != b.radius_tl || a.radius_tr != b.radius_tr || a.radius_br != b.radius_br ||
+        a.radius_bl != b.radius_bl ||
         std::memcmp(&a.dst, &b.dst, sizeof a.dst) || std::memcmp(&a.clip, &b.clip, sizeof a.clip))
       return false;
   }
@@ -381,7 +389,7 @@ void GlPresenter::composite(int x, int y, int w, int h) {
   const int passes = std::max<int>(1, (int(drawn.size()) + kPassLayers - 1) / kPassLayers);
   for (int pass = 0; pass < passes; ++pass) {
     float clip[4 * kPassLayers] = {}, dst[4 * kPassLayers] = {}, src[4 * kPassLayers] = {};
-    float size[2 * kPassLayers] = {}, alpha[kPassLayers] = {};
+    float size[2 * kPassLayers] = {}, alpha[kPassLayers] = {}, radii[4 * kPassLayers] = {};
     int count = 0;
     for (std::size_t i = std::size_t(pass) * kPassLayers; i < drawn.size() && count < kPassLayers; ++i, ++count) {
       const ERLayer& l = *drawn[i].layer;
@@ -391,6 +399,8 @@ void GlPresenter::composite(int x, int y, int w, int h) {
       std::memcpy(clip + 4 * count, c, sizeof c);
       std::memcpy(dst + 4 * count, d, sizeof d);
       std::memcpy(src + 4 * count, s, sizeof s);
+      const float r[] = {float(l.radius_tl), float(l.radius_tr), float(l.radius_br), float(l.radius_bl)};
+      std::memcpy(radii + 4 * count, r, sizeof r);
       size[2 * count] = float(drawn[i].image->width);
       size[2 * count + 1] = float(drawn[i].image->height);
       alpha[count] = l.alpha / 255.0f;
@@ -404,6 +414,7 @@ void GlPresenter::composite(int x, int y, int w, int h) {
       glUniform4fv(at("src"), count, src);
       glUniform2fv(at("image"), count, size);
       glUniform1fv(at("alpha"), count, alpha);
+      glUniform4fv(at("radii"), count, radii);
     }
     glUniform1i(at("with_frame"), pass == passes - 1);
     glUniform1i(at("opaque"), pass == 0);

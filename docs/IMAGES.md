@@ -37,12 +37,14 @@ them with no opt-in.
   beneath the framebuffer, instead of the rasterizer. A fade of it, or of a
   container holding only it, then repaints nothing, and what is drawn over it
   (gradients, text) is not repainted either. It applies while the image is
-  opaque (JPEG art is), untinted, square-cornered, `cover` or `stretch`, with no
-  scale or rotation on it or an ancestor, and no translucent ancestor holding
-  anything else. Below full opacity it also needs a layer directly under it, in
-  the preceding sibling container and starting from an opaque one that covers
-  it: a crossfade keeps the old image opaque underneath until the new one is in.
-  Otherwise, and on a host without layers, it is rasterized as usual; the result
+  opaque (JPEG art is), untinted, `cover` or `stretch`, with no scale or
+  rotation on it or an ancestor, no translucent ancestor holding anything else,
+  and at least partly in view. Below full opacity it also needs a layer directly
+  under it, in the preceding sibling container and starting from an opaque
+  square-cornered one that covers it: a crossfade keeps the old image opaque
+  underneath until the new one is in. A rounded image is a layer only at full
+  opacity; the rasterizer still draws a square of its radius at each rounded
+  corner. A screen holds at most 8 layers. Otherwise, and on a host without layers, it is rasterized as usual; the result
   looks the same. Changing between the two repaints the image's box once.
   Screenshots (`shot:`) composite the layers on the CPU.
 - **Placeholder.** Until the image arrives the element draws only its own style:

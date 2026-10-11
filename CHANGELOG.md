@@ -13,6 +13,11 @@
   workers once per commit, in bands of about equal damaged area (at least 128 Ki pixels each),
   instead of once per damage rect across every worker, and wakes only the workers with a band:
   the same tour went from 0.75 to 0.66 cores with as many slow frames.
+- Patch Embedded React (`patches/embeddedReact-layer-radius.patch`) so a rounded `<Image layer>`
+  at full opacity is drawn by the host too, except a square of its radius at each rounded corner,
+  and an image scrolled out of view no longer takes a layer slot from one in view. Making the
+  cards of a media browser app layers saved no CPU on the PS5: their repaints are mostly other
+  content drawn over and under the image.
 - The frame-time log reports `cpu=` cores and the render thread's CPU ms per frame
   (docs/ANIMATION.md).
 
