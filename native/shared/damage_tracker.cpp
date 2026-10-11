@@ -97,6 +97,11 @@ void blend(const void* src, int stride, std::uint8_t alpha, int x, int y, int w,
   note(x, y, w, h);
 }
 
+void add(const void* src, int stride, std::uint8_t alpha, int x, int y, int w, int h, void* ctx) {
+  inner.add_rect(src, stride, alpha, x, y, w, h, ctx);
+  note(x, y, w, h);
+}
+
 void clear(int x, int y, int w, int h, void* ctx) {
   inner.clear_rect(x, y, w, h, ctx);
   note(x, y, w, h);
@@ -135,6 +140,7 @@ bool damage_tracker_install(int width, int height) {
   wrapper.blend_rect = blend;
   if (inner.move_rect) wrapper.move_rect = move;
   if (inner.clear_rect) wrapper.clear_rect = clear;
+  if (inner.add_rect) wrapper.add_rect = add;
   fb_width = width; fb_height = height;
   damage_tracker_clear();
   embedded_renderer_set_backend(&wrapper);

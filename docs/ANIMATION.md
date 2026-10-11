@@ -264,6 +264,38 @@ change under a transform does; on a large card, keep the light outside the
 scaled subtree, or lift the card with `y` instead of `scale`. For a soft halo,
 put a second, wider sweep with a lower alpha behind the first.
 
+### A light across a card
+
+A gloss that sweeps over a focused card is a gradient band translated across
+it. Two View styles make it look like light on glass rather than a stripe
+pasted on top:
+
+- `roundedClip: true` clips a View's children to its rounded border box,
+  anti-aliased exactly as a rounded background of that box is, so the band runs
+  out through the corners. It implies `overflow: 'hidden'`; `overflow: 'hidden'`
+  alone still clips to the rectangle. Nested rounded clips multiply.
+- `mixBlendMode: 'plus-lighter'` adds what a View and its children draw to what
+  is beneath, saturating at white, so highlights brighten the art instead of
+  washing it out. Each primitive adds, so overlapping layers add up. Under a
+  translucent or transformed ancestor the light adds within that group, which
+  then composites normally.
+
+```jsx
+<View pointerEvents="none" style={{position: 'absolute', left: 0, top: 0, width, height,
+  borderRadius: 36, roundedClip: true}}>
+  <Animated.View style={{position: 'absolute', top: 0, height, width: band, mixBlendMode: 'plus-lighter',
+    transform: [{translateX: x}],
+    backgroundGradient: {type: 'linear', angle: 112, stops: [
+      {color: 'rgba(255,250,240,0)', offset: 0.3}, {color: 'rgba(255,250,240,0.5)', offset: 0.5},
+      {color: 'rgba(255,250,240,0)', offset: 0.52}]}}} />
+</View>
+```
+
+The band repaints only the strip it covers each frame. Neither style has a
+Tailwind class. Content under either never takes the pixel-moving fast paths
+(scroll and translate copies) or becomes a host layer, so keep them on small,
+short-lived elements such as the focused card's light.
+
 ### Page transitions
 
 Give each page a `key` inside `AnimatePresence mode="wait"`: the old page
