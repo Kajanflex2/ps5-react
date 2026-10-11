@@ -298,6 +298,17 @@ test('scrolled frames shift rectangles and are revealed innermost first', () => 
   assert.deepEqual(revealed, [['inner', 400], ['outer', 100]]);
 });
 
+test('focusedRect is the focused element on screen, past the scrolling around it', () => {
+  const t = setup();
+  assert.equal(t.focus.focusedRect(), null);
+  const frame = {parent: null, x: 40, y: 300, reveal: () => {}};
+  const node = t.focus.createNode(t.focus.root, frame, {focusKey: 'card'});
+  t.focus.register(node);
+  t.focus.setRect(node, {x: 100, y: 500, width: 200, height: 120});
+  t.focus.focus(node);
+  assert.deepEqual(t.focus.focusedRect(), {x: 60, y: 200, width: 200, height: 120});
+});
+
 test('an inert scope is out of navigation; a move with nothing visible stays put', () => {
   const t = setup();
   const browse = t.scope(t.focus.root, {inert: true});

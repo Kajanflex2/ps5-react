@@ -35,7 +35,8 @@ export function useFocus() {
   }, []);
   const focus = useCallback(target => manager.focus(target), []);
   const blur = useCallback(() => manager.blur(), []);
-  return {focusedKey: key, focus, blur};
+  const focusedRect = useCallback(() => manager.focusedRect(), []);
+  return {focusedKey: key, focus, blur, focusedRect};
 }
 
 /**

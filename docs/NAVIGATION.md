@@ -176,7 +176,9 @@ needs ([IMAGES.md](IMAGES.md)).
 
 - `useFocusable({focusKey, onPress, autoFocus, ...})` → `{focused, pressed, focusProps}` for
   custom components; spread `focusProps` on a host element.
-- `useFocus()` → `{focusedKey, focus(key), blur()}`.
+- `useFocus()` → `{focusedKey, focus(key), blur(), focusedRect()}`. `focusedRect()` is where the
+  focused element is on screen, `{x, y, width, height}` in render pixels with the scrolling around
+  it applied (transforms are not), or `null`: to place a menu or tooltip next to it.
 - `useIsFocused()` inside a focusable subtree → boolean of the nearest focusable ancestor.
 - `BackHandler.addEventListener('hardwareBackPress', fn)` → `{remove()}`; `fn`
   returning `true` consumes Circle. Order: each enclosing `FocusScope.onBack`,

@@ -273,6 +273,16 @@ export class FocusManager {
       ? remembered : winner;
   }
 
+  /**
+   * Where the focused element is on screen, in render pixels: its layout rectangle moved by the
+   * ScrollViews around it (to where they are scrolling), before transforms. Null with nothing focused.
+   * @returns {Rect | null}
+   */
+  focusedRect() {
+    const rect = this.focused && screenRect(this.focused);
+    return rect ? {...rect} : null;
+  }
+
   /** @param {Node | null} next */
   setFocus(next) {
     const previous = this.focused;
