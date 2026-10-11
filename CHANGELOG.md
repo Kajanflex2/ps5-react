@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — fixes
+
+- The glyph cache unlinked its oldest glyph from the wrong end of its recently-used list, so
+  evicting it once the cache was full left the freed glyph listed as the oldest.
+
 ## Unreleased — video upscalers
 
 - `<Video upscale>` doubles a picture shown bigger than its source with a network for animation

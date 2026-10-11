@@ -271,8 +271,8 @@ struct GlyphCache {
   std::size_t bytes = 0;
 
   void unlink(CachedGlyph* g) {
-    (g->newer ? g->newer->older : oldest) = g->older;
-    (g->older ? g->older->newer : newest) = g->newer;
+    (g->newer ? g->newer->older : newest) = g->older;
+    (g->older ? g->older->newer : oldest) = g->newer;
   }
   void push(CachedGlyph* g) {
     g->newer = nullptr;
