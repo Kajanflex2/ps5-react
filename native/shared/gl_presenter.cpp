@@ -405,7 +405,8 @@ void GlPresenter::composite(int x, int y, int w, int h) {
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     const GlVideo::Target target{l.dst.x, l.dst.y, l.dst.x + l.dst.w, l.dst.y + l.dst.h, l.clip.x, l.clip.y,
                                  l.clip.x + l.clip.w, l.clip.y + l.clip.h, l.alpha / 255.0f};
-    video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_, playing.upscale);
+    video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_, playing.upscale,
+                playing.compare);
     glDisable(GL_SCISSOR_TEST);
     covered = true;
     begin = i + 1;

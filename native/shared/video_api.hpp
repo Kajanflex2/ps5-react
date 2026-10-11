@@ -17,6 +17,7 @@ struct Layer {
   const video::Frame* frame = nullptr; // null until the first frame
   GlVideo::Fit fit = GlVideo::Fit::contain;
   int upscale = upscalers::kNone; // upscalers::find
+  GlVideo::Compare compare;
 };
 bool find(const char* image_name, Layer& layer);
 // For screenshots: the colour the presenter draws at framebuffer pixel (x, y) of a video layer, as the

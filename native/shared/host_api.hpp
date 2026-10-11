@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v14) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v15) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -102,7 +102,9 @@
 //   setLoop(id, loop) / setResizeMode(id, 0 contain | 1 cover | 2 stretch) / selectAudioTrack(id, index) /
 //   selectSubtitleTrack(id, index) / setAudioDelay(id, seconds, -2..2: the sound later than the picture) /
 //   setUpscale(id, model: '' for none, 'artcnn', 'anime4k-s' / -m / -l / -vl / -ul; where compute shaders run) /
-//   setAudioOutput(id, 'pcm' | 'auto' | 'passthrough') ABI v13; read again from the playhead
+//   setAudioOutput(id, 'pcm' | 'auto' | 'passthrough') ABI v13; read again from the playhead /
+//   setCompare(id, model | null, split) ABI v15; right of split (0..1 across the picture) through
+//                                  `model` ('' for none) instead; null ends it
 //   video.addSubtitle(id, source, language, title) the track index of a text subtitle file (path or URL),
 //                                  loaded off the render thread
 //   video.poll()                   [{id, state, paused, seeking, position, duration, buffered, width,

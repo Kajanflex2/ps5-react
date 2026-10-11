@@ -33,8 +33,15 @@ public:
   // `upscale` model (upscalers::find), a picture shown bigger than the model's threshold is doubled first
   // (storage uploads only, as those come with compute shaders). Its passes are split over two display
   // frames, so each picture shows one display frame late. One upscaled video at a time.
+  // With `compare` on, the picture right of `compare.split` (0..1 across the picture) goes through
+  // `compare.model` instead (kNone: as it comes), run whole in the display frame its picture shows in.
+  struct Compare {
+    bool on = false;
+    int model = upscalers::kNone;
+    float split = 0.5f;
+  };
   void draw(std::uint64_t id, const video::Frame& frame, Fit fit, const Target& target, int x, int y, int w, int h,
-            int fb_w, int fb_h, int upscale = upscalers::kNone);
+            int fb_w, int fb_h, int upscale, const Compare& compare);
   // Frees what no video drew since the last call.
   void end_present();
 
@@ -56,7 +63,14 @@ private:
     unsigned int buffer = 0;
     int offsets[3] = {}, pitches[3] = {};
     int model = upscalers::kNone;    // whose result in the slot of the same index belongs to it
+    int tried = upscalers::kNone;    // the model a run on it last started with, done or not
     std::uint64_t generation = 0;
+  };
+  // An upscaler's input: the luma, or the picture as R'G'B'.
+  struct Source {
+    unsigned int texture = 0;
+    int w = 0, h = 0;
+    bool rgb = false;
   };
   struct Entry {
     std::uint64_t id = 0;
@@ -66,15 +80,18 @@ private:
     Planes planes[2];
     int shown = 0;
     int job_model = upscalers::kNone; // upscaling planes[1 - shown]
-    unsigned int source = 0;          // the upscaler's input: the luma, or the picture as R'G'B'
-    int source_w = 0, source_h = 0;
-    bool source_rgb = false;
+    Source source;
+    // The compare model's run: its own input, and the picture (by sequence) its result is of.
+    Source compare_source;
+    int compare_model = upscalers::kNone;
+    std::uint64_t compare_sequence = 0, compare_generation = 0;
   };
   Entry& entry(std::uint64_t id);
   void upload_textures(Entry& entry, const video::Frame& frame);
   void upload_storage(Planes& planes, const video::Frame& frame);
   void free_entry(Entry& entry);
   GlUpscale* upscaler(int model);
+  void extract(Source& source, const Planes& planes, const video::Frame& frame, bool rgb);
   bool start_upscale(Entry& entry, GlUpscale& upscaler, int model, const video::Frame& frame);
   void finish_upscale(Entry& entry, GlUpscale& upscaler);
 

@@ -21,12 +21,14 @@ const upscaleModel = upscale => (upscale === true ? 'artcnn' : upscale || '');
  * track and reads the status. `upscale` names a network for animation that doubles a picture shown
  * bigger than its source ('artcnn' or true, 'anime4k-s', 'anime4k-m', 'anime4k-l', 'anime4k-vl',
  * 'anime4k-ul'), where the GPU runs compute shaders (the PS5); elsewhere it scales as before.
+ * `compare` ({upscale, split}) shows the picture through a second model (false or '' for none) right of
+ * `split` (0..1 across the picture), so two models, or one and none, can be compared on the same frame.
  * `audioOutput` is 'pcm' (decoded, the default), 'auto' (AC-3, E-AC-3 and DTS at 48 kHz go undecoded to a
  * sink whose EDID lists them; see AudioOutput.capabilities()) or 'passthrough' (those go undecoded
  * whatever the EDID says). Passed through, `volume` does nothing: the sink's volume is the one.
  */
 export const Video = forwardRef(function Video(props, ref) {
-  const {source, paused = false, muted = false, volume = 1, repeat = false, resizeMode = 'contain', upscale = false, audio = true,
+  const {source, paused = false, muted = false, volume = 1, repeat = false, resizeMode = 'contain', upscale = false, compare, audio = true,
          startTime = 0, audioDelay = 0, audioOutput = 'pcm', progressUpdateInterval = 250, subtitles, subtitleTrack = -1, onLoad, onProgress, onBuffer, onSeek,
          onEnd, onError, onStatus, onSubtitle, style, ...rest} = props;
   const uri = typeof source === 'string' ? source : source?.uri;
@@ -77,6 +79,7 @@ export const Video = forwardRef(function Video(props, ref) {
     const player = openVideo(uri, {paused, muted, volume, loop: repeat, start: startTime, audio, headers, audioOutput}, listener);
     player.setResizeMode(FITS[resizeMode] ?? 0);
     player.setUpscale(upscaleModel(upscale));
+    if (compare) player.setCompare(upscaleModel(compare.upscale), compare.split ?? 0.5);
     player.setAudioDelay(audioDelay);
     for (const file of subtitles ?? []) player.addSubtitle(file);
     player.selectSubtitleTrack(subtitleTrack);
@@ -96,6 +99,8 @@ export const Video = forwardRef(function Video(props, ref) {
   useEffect(() => { self.current.player?.setAudioOutput(audioOutput); }, [audioOutput]);
   useEffect(() => { self.current.player?.setResizeMode(FITS[resizeMode] ?? 0); }, [resizeMode]);
   useEffect(() => { self.current.player?.setUpscale(upscaleModel(upscale)); }, [upscale]);
+  const compareModel = compare ? upscaleModel(compare.upscale) : null, split = compare?.split ?? 0.5;
+  useEffect(() => { self.current.player?.setCompare(compareModel, split); }, [compareModel, split]);
   useEffect(() => { self.current.player?.selectSubtitleTrack(subtitleTrack); }, [subtitleTrack]);
 
   useImperativeHandle(ref, () => ({

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — comparing upscalers
+
+- `<Video compare={{upscale, split}}>` (native ABI v15, `video.setCompare`): right of `split` (0 to 1
+  across the picture) the picture goes through a second model, or none, so two upscalers show side
+  by side on the same frame. The second model runs whole in the display frame its picture first
+  shows in, on top of the element's own: a heavy pair drops frames while playing, a paused picture
+  costs one run per model.
+
+- A model picked while the video was paused never ran: an upscaler started only on a new picture,
+  so the paused one went on showing as it came. A model picked over a paused picture now runs on it
+  once.
+
 ## Unreleased — focus returns through stacked pages
 
 - Add `useFocusActions()`: `focus`, `blur` and `focusedRect` without subscribing to focus changes.
