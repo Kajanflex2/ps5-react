@@ -12,8 +12,16 @@ struct AVCodecParameters;
 namespace video {
 
 // The pixel layouts the presenter draws: 4:2:0 with planar or interleaved chroma, 8 or 10 bits. 10-bit
-// samples sit in 16-bit words, low-aligned in planar frames (FFmpeg's yuv420p10le) and high in P010.
-enum class Format : std::uint8_t { i420, nv12, i420_10, p010 };
+// samples sit in 16-bit words, low-aligned in planar frames (FFmpeg's yuv420p10le) and in the PS5
+// decoder's interleaved ones (nv12_10), high in P010.
+enum class Format : std::uint8_t { i420, nv12, i420_10, p010, nv12_10 };
+
+inline bool deep(Format format) { return format == Format::i420_10 || format == Format::p010 || format == Format::nv12_10; }
+inline bool interleaved(Format format) { return format == Format::nv12 || format == Format::p010 || format == Format::nv12_10; }
+// What a 16-bit sample read as a fraction of 65535 is multiplied by to span 0..1.
+inline float sample_scale(Format format) {
+  return format == Format::i420_10 || format == Format::nv12_10 ? 65535.0f / 1023.0f : 1.0f;
+}
 enum class Matrix : std::uint8_t { bt601, bt709, bt2020 };
 enum class Transfer : std::uint8_t { sdr, pq, hlg };
 

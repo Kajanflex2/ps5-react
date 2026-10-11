@@ -347,13 +347,13 @@ bool find(const char* image_name, Layer& layer) {
 
 namespace {
 float sample_at(const video::Frame& frame, int plane, int x, int y, int second) {
-  const bool wide = frame.format == video::Format::i420_10 || frame.format == video::Format::p010;
-  const bool pairs = (frame.format == video::Format::nv12 || frame.format == video::Format::p010) && plane == 1;
+  const bool wide = video::deep(frame.format);
+  const bool pairs = video::interleaved(frame.format) && plane == 1;
   const int bytes = wide ? 2 : 1, step = bytes * (pairs ? 2 : 1);
   const std::uint8_t* at = frame.planes[plane] + static_cast<std::size_t>(y) * frame.pitch[plane] + x * step + second * bytes;
   if (!wide) return at[0] / 255.0f;
   const float value = (at[0] | (at[1] << 8)) / 65535.0f;
-  return frame.format == video::Format::i420_10 ? value * 65535.0f / 1023.0f : value;
+  return value * video::sample_scale(frame.format);
 }
 
 float pq_to_nits(float e) {
@@ -381,7 +381,7 @@ bool sample(const char* image_name, int dst_x, int dst_y, int dst_w, int dst_h, 
     else v = (v - 0.5f) * picture / box + 0.5f;
   }
   const int px = std::clamp(int(u * frame->width), 0, frame->width - 1), py = std::clamp(int(v * frame->height), 0, frame->height - 1);
-  const bool pairs = frame->format == video::Format::nv12 || frame->format == video::Format::p010;
+  const bool pairs = video::interleaved(frame->format);
   float yuv[3] = {sample_at(*frame, 0, px, py, 0), sample_at(*frame, 1, px / 2, py / 2, 0),
                   pairs ? sample_at(*frame, 1, px / 2, py / 2, 1) : sample_at(*frame, 2, px / 2, py / 2, 0)};
   const float kr[] = {0.299f, 0.2126f, 0.2627f}, kb[] = {0.114f, 0.0722f, 0.0593f};

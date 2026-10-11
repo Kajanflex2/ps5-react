@@ -166,8 +166,8 @@ GLuint program(const std::string& fragment_source) {
   return linked;
 }
 
-bool wide(video::Format format) { return format == video::Format::i420_10 || format == video::Format::p010; }
-bool interleaved(video::Format format) { return format == video::Format::nv12 || format == video::Format::p010; }
+using video::interleaved;
+bool wide(video::Format format) { return video::deep(format); }
 
 std::uint32_t micros_since(std::chrono::steady_clock::time_point start) {
   return static_cast<std::uint32_t>(
@@ -194,7 +194,7 @@ void set_color(GLuint program, const video::Frame& frame, float alpha) {
   glUniform1i(glGetUniformLocation(program, "transfer"), static_cast<int>(frame.transfer));
   glUniform1f(glGetUniformLocation(program, "alpha"), alpha);
   glUniform1i(glGetUniformLocation(program, "interleaved"), interleaved(frame.format) ? 1 : 0);
-  glUniform1f(glGetUniformLocation(program, "scale"), frame.format == video::Format::i420_10 ? 65535.0f / 1023.0f : 1.0f);
+  glUniform1f(glGetUniformLocation(program, "scale"), video::sample_scale(frame.format));
 }
 } // namespace
 

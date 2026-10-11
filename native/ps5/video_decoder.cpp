@@ -524,7 +524,8 @@ void Videodec2::take(const OutputInfo& out, int slot) {
   const int pitch = static_cast<int>(out.pitch_bytes ? out.pitch_bytes : out.pitch);
   const bool deep = out.pitch_bytes >= out.pitch * 2u;
   video::Frame frame;
-  frame.format = deep ? video::Format::p010 : video::Format::nv12;
+  // 10-bit samples come low-aligned in their 16-bit words (measured: a full-range picture peaks at 1023).
+  frame.format = deep ? video::Format::nv12_10 : video::Format::nv12;
   frame.width = std::min<int>(display_width_, out.width);
   frame.height = std::min<int>(display_height_, out.height);
   frame.planes[0] = base;
