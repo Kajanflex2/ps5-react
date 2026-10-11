@@ -8,12 +8,14 @@ import {bytes, known, fixed} from '../format.js';
 
 const celsius = value => `${value} °C`;
 const user = entry => `${entry.name} (${entry.id})`;
+const offset = minutes => `UTC${minutes < 0 ? '-' : '+'}${Math.floor(Math.abs(minutes) / 60)}:${String(Math.abs(minutes) % 60).padStart(2, '0')}`;
 
 function read() {
   return {
     platform: Platform.OS,
     target: Platform.select({ps5: 'Console title', desktop: 'macOS preview'}),
     device: DeviceInfo.get(),
+    utcOffset: DeviceInfo.utcOffset(),
     foreground: Users.getForeground(),
     users: Users.getLoggedIn(),
   };
@@ -22,7 +24,7 @@ function read() {
 export function DevicePage() {
   const [info, setInfo] = useState(() => attempt(read));
   if (info.error) return <Status status={info} />;
-  const {platform, target, device, foreground, users} = info.value;
+  const {platform, target, device, utcOffset, foreground, users} = info.value;
 
   return (
     <View className="flex-1 gap-5">
@@ -32,6 +34,7 @@ export function DevicePage() {
           <Field name="Platform.select" value={target} />
           <Field name="Model" value={known(device.model, String)} />
           <Field name="Firmware" value={known(device.firmware, String)} />
+          <Field name="Time zone" value={offset(utcOffset)} />
         </Panel>
         <Panel title="USERS" grow>
           <Field name="Foreground" value={foreground ? user(foreground) : 'none'} />

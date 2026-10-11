@@ -14,6 +14,7 @@ extern "C" {
 #include <cerrno>
 #include <cstdio>
 #include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -304,6 +305,28 @@ JSValue device_info(JSContext* ctx, JSValueConst, int, JSValueConst*) {
   return object;
 }
 
+long long days_from_civil(long long y, int m, int d) {
+  y -= m <= 2;
+  const long long era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400;
+  const long long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+}
+
+// Minutes east of UTC at an instant: localtime's calendar fields less the instant itself. Not
+// tm_gmtoff: the PS5's libc leaves it 0 while the fields carry the console's time zone.
+JSValue device_utc_offset(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  double ms = 0;
+  if (JS_ToFloat64(ctx, &ms, argv[0]) || !std::isfinite(ms)) {
+    return JS_ThrowTypeError(ctx, "device.utcOffset: time must be milliseconds since the epoch");
+  }
+  const time_t seconds = static_cast<time_t>(std::floor(ms / 1000));
+  tm local = {};
+  if (!localtime_r(&seconds, &local)) return JS_ThrowInternalError(ctx, "device.utcOffset: %s", strerror(errno));
+  const long long fields = days_from_civil(local.tm_year + 1900LL, local.tm_mon + 1, local.tm_mday) * 86400
+    + local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec;
+  return JS_NewInt32(ctx, static_cast<int>((fields - seconds) / 60));
+}
+
 JSValue user_object(JSContext* ctx, const host::User& user) {
   JSValue object = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx, object, "id", JS_NewInt32(ctx, user.id));
@@ -504,7 +527,7 @@ constexpr Function kFs[] = {
   {"removeTree", fs_remove_tree, 1},
   {"rename", fs_rename, 2}, {"chmod", fs_chmod, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
 };
-constexpr Function kDevice[] = {{"info", device_info, 0}};
+constexpr Function kDevice[] = {{"info", device_info, 0}, {"utcOffset", device_utc_offset, 1}};
 constexpr Function kUsers[] = {{"foreground", users_foreground, 0}, {"loggedIn", users_logged_in, 0}};
 constexpr Function kPad[] = {
   {"setLightBar", pad_set_light_bar, 3}, {"resetLightBar", pad_reset_light_bar, 0},

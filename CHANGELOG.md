@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — local time
+
+- Add `DeviceInfo.utcOffset(time)` (native ABI v14, `device.utcOffset`): the system time zone's
+  offset from UTC in minutes at an instant, from `localtime_r` in the shared host. The runtime has
+  no `Date` objects, so apps had no way to show a local clock short of hard-coding a zone. The
+  PS5's libc gives the console's zone in the calendar fields but leaves `tm_gmtoff` 0, so the
+  offset is the fields less the instant.
+
 ## Unreleased — HDMI audio passthrough
 
 - `<Video audioOutput>`: `'pcm'` (the default, as before) decodes the track; `'auto'` sends AC-3,

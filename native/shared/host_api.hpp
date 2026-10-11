@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v13) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v14) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -29,6 +29,7 @@
 //   device.info()                  {model, firmware, cpuTemperature, socTemperature,
 //                                   cpuFrequency, freeMemory, processTime, language}; unknown = null
 //                                  language: the system language as a BCP 47 tag ('pt-BR')
+//   device.utcOffset(ms)           ABI v14; minutes east of UTC at that instant in the system time zone
 //   users.foreground()             {id, name} | null
 //   users.loggedIn()               [{id, name}]
 //   notify(message, subMessage)    boolean
