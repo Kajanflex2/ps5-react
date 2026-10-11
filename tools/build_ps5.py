@@ -138,7 +138,7 @@ def main():
                ROOT / "native/shared/network_api.cpp", ROOT / "native/shared/archives.cpp", ROOT / "native/shared/archive_preflight.cpp", ROOT / "native/shared/rar5_password.cpp", ROOT / "native/shared/archive_writer.cpp", ROOT / "native/shared/archive_api.cpp", ROOT / "native/shared/browser_capture_api.cpp", ROOT / "native/shared/lan.cpp", ROOT / "native/shared/lan_api.cpp", ROOT / "native/ps5/browser_capture.cpp", ROOT / "native/shared/package_api.cpp", ROOT / "native/ps5/package_installer.cpp", ROOT / "native/ps5/payload_loader.cpp", ROOT / "native/ps5/relaunch.cpp", ROOT / "native/ps5/crash_log.cpp", ROOT / "native/ps5/utf8_locale.cpp", ROOT / "native/ps5/network_platform.cpp",
                ROOT / "native/shared/image_loader.cpp", ROOT / "native/shared/image_api.cpp",
                ROOT / "native/shared/sound_api.cpp", generated / "sounds.generated.c",
-               ROOT / "native/shared/gl_presenter.cpp", ROOT / "native/shared/gl_video.cpp", ROOT / "native/shared/video_api.cpp",
+               ROOT / "native/shared/gl_presenter.cpp", ROOT / "native/shared/gl_video.cpp", ROOT / "native/shared/gl_upscale.cpp", ROOT / "native/shared/video_api.cpp",
                ROOT / "native/shared/frame_stats.cpp", ROOT / "native/shared/js_heap.cpp", ROOT / "native/shared/js_profiler.cpp", ROOT / "native/shared/damage_tracker.cpp", ROOT / "native/shared/render_workers.cpp", ROOT / "native/shared/input_script.cpp", ROOT / "native/shared/screenshot.cpp", ROOT / "native/shared/text_shaper.cpp", generated / "assets.generated.c",
                bundle_c, *[hui / ("src/platform/ps5/" + n + ".cpp") for n in ("display_egl", "pad", "system", "audio_out")],
                hui / "src/core/input.cpp", hui / "src/audio/mixer.cpp", hui / "src/runtime/app_heap.c", hui / "src/runtime/runtime_shims.c",
@@ -310,6 +310,8 @@ def main():
         "SheenBidi-LICENSE": sb / "LICENSE",
         "Inter-LICENSE": hui / "assets/fonts/Inter-LICENSE.txt",
         "material-sounds-NOTICE.txt": ROOT / "licenses/material-sounds-NOTICE.txt",
+        "ArtCNN-LICENSE": ROOT / "licenses/ArtCNN-LICENSE",
+        "Anime4K-LICENSE": ROOT / "licenses/Anime4K-LICENSE",
         "ps5-opengl-LICENSE": gl.parent / "LICENSE",
         "ps5-opengl-NOTICES.md": gl.parent / "THIRD_PARTY_NOTICES.md",
     }.items():

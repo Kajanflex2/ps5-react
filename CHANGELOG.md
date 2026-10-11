@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — video upscalers
+
+- `<Video upscale>` doubles a picture shown bigger than its source with a network for animation
+  before it is scaled to its box: `'artcnn'` (ArtCNN C4F16, the luma) or `'anime4k-s'`, `-m`, `-l`,
+  `-vl`, `-ul` (Anime4K Upscale CNN x2). Their mpv user shaders are embedded unchanged and run as
+  GL compute passes, split over two display frames; needs compute shaders (the PS5).
+- 10-bit pictures from the PS5 decoder are read as low-aligned samples: HEVC Main 10
+  showed green.
+
 ## Unreleased — cheaper mounts
 
 - `motion` elements run two effects each instead of six and add a context provider only

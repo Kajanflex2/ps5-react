@@ -554,6 +554,7 @@ export function openVideo(source, options, listener) {
     setLoop: loop => video.setLoop(id, !!loop),
     setAudioDelay: seconds => video.setAudioDelay(id, seconds),
     setResizeMode: mode => video.setResizeMode(id, mode),
+    setUpscale: model => video.setUpscale(id, model),
     selectAudioTrack: index => video.selectAudioTrack(id, index),
     selectSubtitleTrack: index => video.selectSubtitleTrack(id, index),
     addSubtitle: ({uri, language = '', title = ''}) => video.addSubtitle(id, uri, language, title),

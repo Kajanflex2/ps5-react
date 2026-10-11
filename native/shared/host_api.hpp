@@ -88,7 +88,8 @@
 //   video.close(id)               stops it and frees it off the render thread
 //   video.setPaused(id, paused) / seek(id, seconds) / setVolume(id, 0..1) / setMuted(id, muted) /
 //   setLoop(id, loop) / setResizeMode(id, 0 contain | 1 cover | 2 stretch) / selectAudioTrack(id, index) /
-//   selectSubtitleTrack(id, index) / setAudioDelay(id, seconds, -2..2: the sound later than the picture)
+//   selectSubtitleTrack(id, index) / setAudioDelay(id, seconds, -2..2: the sound later than the picture) /
+//   setUpscale(id, model: '' for none, 'artcnn', 'anime4k-s' / -m / -l / -vl / -ul; where compute shaders run)
 //   video.addSubtitle(id, source, language, title) the track index of a text subtitle file (path or URL),
 //                                  loaded off the render thread
 //   video.poll()                   [{id, state, paused, seeking, position, duration, buffered, width,

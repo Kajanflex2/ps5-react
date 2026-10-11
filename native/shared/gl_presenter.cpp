@@ -369,7 +369,7 @@ void GlPresenter::draw_layers(int x, int y, int w, int h) {
         const GlVideo::Target target{layer.dst.x, layer.dst.y, layer.dst.x + layer.dst.w, layer.dst.y + layer.dst.h,
                                      layer.clip.x, layer.clip.y, layer.clip.x + layer.clip.w,
                                      layer.clip.y + layer.clip.h, layer.alpha / 255.0f};
-        video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_);
+        video_.draw(playing.id, *playing.frame, playing.fit, target, x, y, w, h, width_, height_, playing.upscale);
         use_layer_program();
       }
       continue;

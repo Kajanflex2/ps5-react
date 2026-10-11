@@ -63,12 +63,13 @@ vec3 tone_map(vec3 nits) {
   if (peak > knee) rgb *= (knee + (1.0 - knee) * tanh((peak - knee) / (1.0 - knee))) / peak;
   return pow(rgb, vec3(1.0 / 2.4));
 }
-void finish(vec3 yuv) {
-  vec3 rgb = matrix * ((yuv - offset) * gain);
+// From non-linear R'G'B' in the video's transfer.
+void finish_rgb(vec3 rgb) {
   if (transfer == 1) rgb = tone_map(pq_to_nits(rgb));
   else if (transfer == 2) rgb = tone_map(hlg_to_nits(rgb));
   color = vec4(clamp(rgb, 0.0, 1.0), 1.0) * alpha;
 }
+void finish(vec3 yuv) { finish_rgb(matrix * ((yuv - offset) * gain)); }
 )";
 
 const char* texture_fragment = R"(#version 410 core
@@ -86,14 +87,13 @@ void main() {
 )";
 
 // The PS5 path: the frame's planes, as uploaded, in one buffer the shader reads samples from.
-[[maybe_unused]] const char* storage_fragment = R"(#version 430 core
-in vec2 at;
+[[maybe_unused]] const char* storage_planes = R"(
 layout(std430, binding = 0) readonly buffer Planes { uint words[]; };
+uniform int wide;        // 16-bit samples
 uniform ivec3 offsets;   // byte offset of each plane
 uniform ivec3 pitches;   // bytes per row
 uniform ivec2 luma;      // plane sizes in samples
 uniform ivec2 chroma;
-uniform int wide;        // 16-bit samples
 uniform int interleaved;
 uniform float scale;
 float sample_at(int at) {
@@ -111,18 +111,48 @@ float bilinear(int base, int pitch, ivec2 size, int step, int second, vec2 pos) 
   float s01 = sample_at(base + b.y * pitch + a.x * step + second), s11 = sample_at(base + b.y * pitch + b.x * step + second);
   return mix(mix(s00, s10, t.x), mix(s01, s11, t.x), t.y);
 }
+vec2 chroma_at(vec2 at) {
+  int bytes = wide + 1;
+  if (interleaved == 1)
+    return vec2(bilinear(offsets.y, pitches.y, chroma, bytes * 2, 0, at), bilinear(offsets.y, pitches.y, chroma, bytes * 2, bytes, at));
+  return vec2(bilinear(offsets.y, pitches.y, chroma, bytes, 0, at), bilinear(offsets.z, pitches.z, chroma, bytes, 0, at));
+}
 )";
 [[maybe_unused]] const char* storage_main = R"(
+in vec2 at;
+uniform int upscaled;    // 1: the luma from `upscaled_plane`; 2: the picture from it, as R'G'B'
+uniform sampler2D upscaled_plane;
 void main() {
-  int bytes = wide + 1;
-  float y = bilinear(offsets.x, pitches.x, luma, bytes, 0, at);
-  vec2 c;
-  if (interleaved == 1) {
-    c = vec2(bilinear(offsets.y, pitches.y, chroma, bytes * 2, 0, at), bilinear(offsets.y, pitches.y, chroma, bytes * 2, bytes, at));
-  } else {
-    c = vec2(bilinear(offsets.y, pitches.y, chroma, bytes, 0, at), bilinear(offsets.z, pitches.z, chroma, bytes, 0, at));
+  if (upscaled == 2) {
+    finish_rgb(texture(upscaled_plane, at).rgb);
+    return;
   }
-  finish(vec3(y, c) * scale);
+  vec3 yuv = vec3(upscaled == 1 ? 0.0 : bilinear(offsets.x, pitches.x, luma, wide + 1, 0, at), chroma_at(at)) * scale;
+  if (upscaled == 1) yuv.x = texture(upscaled_plane, at).r;
+  finish(yuv);
+}
+)";
+// An upscaler's input out of the buffer, one invocation per luma sample: the luma, scaled as the
+// picture shader scales it (mpv's LUMA), or with RGB defined the picture as R'G'B' (mpv's MAIN).
+[[maybe_unused]] const char* extract_main = R"(
+layout(local_size_x = 16, local_size_y = 16) in;
+#ifdef RGB
+layout(rgba16f, binding = 0) writeonly uniform image2D plane_out;
+#else
+layout(r16f, binding = 0) writeonly uniform image2D plane_out;
+#endif
+uniform mat3 matrix;
+uniform vec3 offset, gain;
+void main() {
+  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+  if (p.x >= luma.x || p.y >= luma.y) return;
+  float y = sample_at(offsets.x + p.y * pitches.x + p.x * (wide + 1)) * scale;
+#ifdef RGB
+  vec3 yuv = vec3(y, chroma_at((vec2(p) + 0.5) / vec2(luma)) * scale);
+  imageStore(plane_out, p, vec4(matrix * ((yuv - offset) * gain), 1.0));
+#else
+  imageStore(plane_out, p, vec4(y));
+#endif
 }
 )";
 
@@ -196,6 +226,32 @@ void set_color(GLuint program, const video::Frame& frame, float alpha) {
   glUniform1i(glGetUniformLocation(program, "interleaved"), interleaved(frame.format) ? 1 : 0);
   glUniform1f(glGetUniformLocation(program, "scale"), video::sample_scale(frame.format));
 }
+#ifdef GL_COMPUTE_SHADER
+GLuint compute_program(const std::string& source) {
+  GLuint shader = compile(GL_COMPUTE_SHADER, source), linked = 0;
+  if (!shader) return 0;
+  linked = glCreateProgram();
+  glAttachShader(linked, shader);
+  glLinkProgram(linked);
+  glDeleteShader(shader);
+  GLint ok = 0;
+  glGetProgramiv(linked, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    glDeleteProgram(linked);
+    return 0;
+  }
+  return linked;
+}
+#endif
+
+// The planes' layout in the buffer, for a program that includes storage_planes.
+[[maybe_unused]] void set_planes(GLuint program, const video::Frame& frame, const int offsets[3], const int pitches[3]) {
+  glUniform3i(glGetUniformLocation(program, "offsets"), offsets[0], offsets[1], offsets[2]);
+  glUniform3i(glGetUniformLocation(program, "pitches"), pitches[0], pitches[1], pitches[2]);
+  glUniform2i(glGetUniformLocation(program, "luma"), frame.width, frame.height);
+  glUniform2i(glGetUniformLocation(program, "chroma"), (frame.width + 1) / 2, (frame.height + 1) / 2);
+  glUniform1i(glGetUniformLocation(program, "wide"), wide(frame.format) ? 1 : 0);
+}
 } // namespace
 
 bool GlVideo::init(bool storage_allowed) {
@@ -206,11 +262,13 @@ bool GlVideo::init(bool storage_allowed) {
   glGetIntegerv(GL_MAJOR_VERSION, &major);
   glGetIntegerv(GL_MINOR_VERSION, &minor);
   if (storage_allowed && (major > 4 || (major == 4 && minor >= 3)))
-    storage_program_ = program(std::string(storage_fragment) + color_source + storage_main);
+    storage_program_ = program(std::string("#version 430 core\n") + storage_planes + color_source + storage_main);
 #else
   (void)storage_allowed;
 #endif
   mode_ = storage_program_ ? Upload::storage : Upload::textures;
+  upscalers_.resize(std::size_t(upscalers::count()));
+  upscaler_tried_.assign(std::size_t(upscalers::count()), false);
   glGenVertexArrays(1, &vao_);
   while (glGetError() != GL_NO_ERROR) {}
   return texture_program_ || storage_program_;
@@ -219,16 +277,22 @@ bool GlVideo::init(bool storage_allowed) {
 void GlVideo::release() {
   for (Entry& entry : entries_) free_entry(entry);
   entries_.clear();
-  if (texture_program_) glDeleteProgram(texture_program_);
-  if (storage_program_) glDeleteProgram(storage_program_);
+  for (unsigned int* program : {&texture_program_, &storage_program_, &extract_luma_, &extract_rgb_}) {
+    if (*program) glDeleteProgram(*program);
+    *program = 0;
+  }
   if (vao_) glDeleteVertexArrays(1, &vao_);
-  texture_program_ = storage_program_ = vao_ = 0;
+  vao_ = 0;
+  for (GlUpscale& upscaler : upscalers_) upscaler.release();
+  upscaler_tried_.assign(upscaler_tried_.size(), false);
 }
 
 void GlVideo::free_entry(Entry& entry) {
   for (unsigned int& texture : entry.textures)
     if (texture) glDeleteTextures(1, &texture);
-  if (entry.buffer) glDeleteBuffers(1, &entry.buffer);
+  for (Planes& planes : entry.planes)
+    if (planes.buffer) glDeleteBuffers(1, &planes.buffer);
+  if (entry.source) glDeleteTextures(1, &entry.source);
   entry = {};
 }
 
@@ -244,7 +308,9 @@ void GlVideo::upload_textures(Entry& entry, const video::Frame& frame) {
   const bool deep = wide(frame.format), pairs = interleaved(frame.format);
   const int cw = (frame.width + 1) / 2, ch = (frame.height + 1) / 2;
   const int planes = pairs ? 2 : 3;
-  if (entry.format != frame.format || entry.width != frame.width || entry.height != frame.height || !entry.textures[0]) {
+  Planes& described = entry.planes[0];
+  if (described.format != frame.format || described.width != frame.width || described.height != frame.height ||
+      !entry.textures[0]) {
     for (unsigned int& texture : entry.textures)
       if (texture) glDeleteTextures(1, &texture);
     glGenTextures(planes, entry.textures);
@@ -259,9 +325,9 @@ void GlVideo::upload_textures(Entry& entry, const video::Frame& frame) {
       glTexImage2D(GL_TEXTURE_2D, 0, internal, i ? cw : frame.width, i ? ch : frame.height, 0, two ? GL_RG : GL_RED,
                    deep ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE, nullptr);
     }
-    entry.format = frame.format;
-    entry.width = frame.width;
-    entry.height = frame.height;
+    described.format = frame.format;
+    described.width = frame.width;
+    described.height = frame.height;
   }
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   for (int i = 0; i < planes; ++i) {
@@ -276,49 +342,123 @@ void GlVideo::upload_textures(Entry& entry, const video::Frame& frame) {
   }
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  described.valid = true;
+  described.sequence = frame.sequence;
 }
 
-void GlVideo::upload_storage(Entry& entry, const video::Frame& frame) {
+void GlVideo::upload_storage(Planes& planes, const video::Frame& frame) {
 #ifdef GL_SHADER_STORAGE_BUFFER
+  const auto start = std::chrono::steady_clock::now();
   const int ch = (frame.height + 1) / 2;
-  const int planes = interleaved(frame.format) ? 2 : 3;
+  const int count = interleaved(frame.format) ? 2 : 3;
   std::size_t total = 0;
-  for (int i = 0; i < planes; ++i) {
-    entry.offsets[i] = static_cast<int>(total);
-    entry.pitches[i] = frame.pitch[i];
+  for (int i = 0; i < count; ++i) {
+    planes.offsets[i] = static_cast<int>(total);
+    planes.pitches[i] = frame.pitch[i];
     total += (static_cast<std::size_t>(frame.pitch[i]) * (i ? ch : frame.height) + 3) & ~std::size_t(3);
   }
-  if (!entry.buffer) glGenBuffers(1, &entry.buffer);
-  glBindBuffer(GL_SHADER_STORAGE_BUFFER, entry.buffer);
+  if (!planes.buffer) glGenBuffers(1, &planes.buffer);
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, planes.buffer);
   // A new store each frame: the GPU may still read the previous one.
   glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(total), nullptr, GL_STREAM_DRAW);
-  for (int i = 0; i < planes; ++i)
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, entry.offsets[i],
+  for (int i = 0; i < count; ++i)
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, planes.offsets[i],
                     static_cast<GLsizeiptr>(frame.pitch[i]) * (i ? ch : frame.height), frame.planes[i]);
   glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-  entry.buffer_size = total;
-  entry.format = frame.format;
-  entry.width = frame.width;
-  entry.height = frame.height;
+  planes.valid = true;
+  planes.sequence = frame.sequence;
+  planes.format = frame.format;
+  planes.width = frame.width;
+  planes.height = frame.height;
+  planes.model = upscalers::kNone;
   upload_bytes_ += total;
+  upload_us_ += micros_since(start);
 #else
-  (void)entry;
+  (void)planes;
   (void)frame;
 #endif
 }
 
+// The model's upscaler, compiled on first use; null where it cannot run.
+GlUpscale* GlVideo::upscaler(int model) {
+#ifdef GL_COMPUTE_SHADER
+  if (model < 0 || model >= upscalers::count() || mode_ != Upload::storage) return nullptr;
+  GlUpscale& upscaler = upscalers_[std::size_t(model)];
+  if (!upscaler_tried_[std::size_t(model)]) {
+    upscaler_tried_[std::size_t(model)] = true;
+    const auto start = std::chrono::steady_clock::now();
+    const std::string extract = std::string("#version 430 core\n") + storage_planes + extract_main;
+    if (!extract_luma_) extract_luma_ = compute_program(extract);
+    if (!extract_rgb_) extract_rgb_ = compute_program(std::string("#version 430 core\n#define RGB\n") + storage_planes + extract_main);
+    const bool ready = extract_luma_ && extract_rgb_ && upscaler.init(model);
+    std::fprintf(stderr, "Video upscale %s %s (%.1f ms to compile)\n", upscalers::name(model),
+                 ready ? "ready" : "unavailable", micros_since(start) / 1000.0);
+  }
+  return upscaler.ready() && extract_luma_ && extract_rgb_ ? &upscaler : nullptr;
+#else
+  (void)model;
+  return nullptr;
+#endif
+}
+
+// Turns the picture waiting in planes[1 - shown] into the upscaler's input and starts its run, a share
+// of it now. False when it cannot run.
+bool GlVideo::start_upscale(Entry& entry, GlUpscale& upscaler, int model, const video::Frame& frame) {
+#ifdef GL_COMPUTE_SHADER
+  const int back = 1 - entry.shown;
+  const Planes& planes = entry.planes[back];
+  const bool rgb = upscaler.reads_rgb();
+  if (!entry.source || entry.source_w != planes.width || entry.source_h != planes.height || entry.source_rgb != rgb) {
+    if (entry.source) glDeleteTextures(1, &entry.source);
+    glGenTextures(1, &entry.source);
+    glBindTexture(GL_TEXTURE_2D, entry.source);
+    glTexStorage2D(GL_TEXTURE_2D, 1, rgb ? GL_RGBA16F : GL_R16F, planes.width, planes.height);
+    // Anime4K reads its source bilinearly at the output's size.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    entry.source_w = planes.width;
+    entry.source_h = planes.height;
+    entry.source_rgb = rgb;
+  }
+  const GLuint extract = rgb ? extract_rgb_ : extract_luma_;
+  glUseProgram(extract);
+  set_planes(extract, frame, planes.offsets, planes.pitches);
+  set_color(extract, frame, 1);
+  glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, planes.buffer);
+  glBindImageTexture(0, entry.source, 0, GL_FALSE, 0, GL_WRITE_ONLY, rgb ? GL_RGBA16F : GL_R16F);
+  glDispatchCompute(GLuint((planes.width + 15) / 16), GLuint((planes.height + 15) / 16), 1);
+  glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+  glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, rgb ? GL_RGBA16F : GL_R16F);
+  if (!upscaler.start(entry.source, planes.width, planes.height, back)) return false;
+  entry.job_model = model;
+  // Half now, half at the next display frame: a 24 or 30 fps picture is due every two or three.
+  if (upscaler.step(0.5f)) finish_upscale(entry, upscaler);
+  return true;
+#else
+  (void)entry;
+  (void)upscaler;
+  (void)model;
+  (void)frame;
+  return false;
+#endif
+}
+
+// The run is done: its picture is the one shown from now on.
+void GlVideo::finish_upscale(Entry& entry, GlUpscale& upscaler) {
+  entry.shown = 1 - entry.shown;
+  entry.planes[entry.shown].model = entry.job_model;
+  entry.planes[entry.shown].generation = upscaler.generation();
+  entry.job_model = upscalers::kNone;
+}
+
 void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const Target& target, int x, int y, int w,
-                   int h, int fb_w, int fb_h) {
+                   int h, int fb_w, int fb_h, int upscale) {
   if (!frame.planes[0] || frame.width <= 0 || frame.height <= 0) return;
   Entry& e = entry(id);
   e.drawn = true;
-  if (e.sequence != frame.sequence) {
-    const auto start = std::chrono::steady_clock::now();
-    if (mode_ == Upload::storage) upload_storage(e, frame);
-    else upload_textures(e, frame);
-    e.sequence = frame.sequence;
-    upload_us_ += micros_since(start);
-  }
   // The picture's shape, fitted into the element's box.
   const float bw = float(target.x1 - target.x0), bh = float(target.y1 - target.y0);
   if (bw <= 0 || bh <= 0) return;
@@ -346,6 +486,42 @@ void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const T
       sy1 = sy0 + part;
     }
   }
+
+  // The picture's size on screen, in window pixels, against the model's condition for a doubler.
+  const float shown_w = (dx1 - dx0) / (sx1 - sx0) * w / fb_w, shown_h = (dy1 - dy0) / (sy1 - sy0) * h / fb_h;
+  GlUpscale* upscaling = upscaler(upscale);
+  if (upscaling && !(shown_w > frame.width * upscaling->threshold() && shown_h > frame.height * upscaling->threshold()))
+    upscaling = nullptr;
+  if (mode_ == Upload::textures) {
+    if (!e.planes[0].valid || e.planes[0].sequence != frame.sequence) {
+      const auto start = std::chrono::steady_clock::now();
+      upload_textures(e, frame);
+      upload_us_ += micros_since(start);
+    }
+  } else if (!upscaling) {
+    e.job_model = upscalers::kNone;
+    Planes& shown = e.planes[e.shown];
+    if (!shown.valid || shown.sequence != frame.sequence) upload_storage(shown, frame);
+  } else {
+    if (e.job_model != upscalers::kNone && e.job_model != upscale) e.job_model = upscalers::kNone;
+    if (e.job_model != upscalers::kNone && upscaling->step(1.0f)) finish_upscale(e, *upscaling);
+    const Planes &shown = e.planes[e.shown], &back = e.planes[1 - e.shown];
+    const bool waiting = e.job_model != upscalers::kNone && back.sequence == frame.sequence;
+    if (!waiting && !(shown.valid && shown.sequence == frame.sequence)) {
+      // A picture due every display frame leaves no time to split a run: finish the last one now.
+      if (e.job_model != upscalers::kNone) {
+        upscaling->step(1.0f);
+        finish_upscale(e, *upscaling);
+      }
+      upload_storage(e.planes[1 - e.shown], frame);
+      if (!start_upscale(e, *upscaling, upscale, frame)) e.shown = 1 - e.shown; // plain, at once
+    }
+  }
+
+  const Planes& planes = e.planes[mode_ == Upload::textures ? 0 : e.shown];
+  if (!planes.valid) return;
+  unsigned int upscaled = 0;
+  if (upscaling && planes.model == upscale) upscaled = upscaling->result(e.shown, planes.generation);
   const GLuint used = mode_ == Upload::storage ? storage_program_ : texture_program_;
   glUseProgram(used);
   glBindVertexArray(vao_);
@@ -355,16 +531,22 @@ void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const T
   set_color(used, frame, target.alpha);
   if (mode_ == Upload::storage) {
 #ifdef GL_SHADER_STORAGE_BUFFER
-    glUniform3i(glGetUniformLocation(used, "offsets"), e.offsets[0], e.offsets[1], e.offsets[2]);
-    glUniform3i(glGetUniformLocation(used, "pitches"), e.pitches[0], e.pitches[1], e.pitches[2]);
-    glUniform2i(glGetUniformLocation(used, "luma"), frame.width, frame.height);
-    glUniform2i(glGetUniformLocation(used, "chroma"), (frame.width + 1) / 2, (frame.height + 1) / 2);
-    glUniform1i(glGetUniformLocation(used, "wide"), wide(frame.format) ? 1 : 0);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, e.buffer);
+    video::Frame described = frame;
+    described.format = planes.format;
+    described.width = planes.width;
+    described.height = planes.height;
+    set_planes(used, described, planes.offsets, planes.pitches);
+    glUniform1i(glGetUniformLocation(used, "interleaved"), interleaved(planes.format) ? 1 : 0);
+    glUniform1f(glGetUniformLocation(used, "scale"), video::sample_scale(planes.format));
+    glUniform1i(glGetUniformLocation(used, "upscaled"), !upscaled ? 0 : upscaling->reads_rgb() ? 2 : 1);
+    glUniform1i(glGetUniformLocation(used, "upscaled_plane"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, upscaled);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, planes.buffer);
 #endif
   } else {
-    const int planes = interleaved(frame.format) ? 2 : 3;
-    for (int i = 0; i < planes; ++i) {
+    const int count = interleaved(frame.format) ? 2 : 3;
+    for (int i = 0; i < count; ++i) {
       glActiveTexture(GL_TEXTURE0 + i);
       glBindTexture(GL_TEXTURE_2D, e.textures[i]);
     }
@@ -379,12 +561,32 @@ void GlVideo::draw(std::uint64_t id, const video::Frame& frame, Fit fit, const T
   glEnable(GL_SCISSOR_TEST);
   glScissor(cx0, cy0, std::max(cx1 - cx0, 0), std::max(cy1 - cy0, 0));
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+  if (upscaled) glBindTexture(GL_TEXTURE_2D, 0);
   if (mode_ == Upload::textures) {
     for (int i = 2; i >= 0; --i) {
       glActiveTexture(GL_TEXTURE0 + i);
       glBindTexture(GL_TEXTURE_2D, 0);
     }
   }
+}
+
+std::string GlVideo::take_upscale_log() {
+  std::string out;
+  for (int model = 0; model < int(upscalers_.size()); ++model) {
+    const GlUpscale::Stats stats = upscalers_[std::size_t(model)].take_stats();
+    if (!stats.runs && !stats.steps) continue;
+    char line[160];
+    std::snprintf(line, sizeof line, "%s%s: %u frames, gpu %.2f ms per frame, %.2f ms longest step (%u steps timed)",
+                  out.empty() ? "" : "\n", upscalers::name(model), stats.runs,
+                  stats.runs ? stats.gpu_ns / 1e6 / stats.runs : 0.0, stats.max_step_ns / 1e6, stats.steps);
+    out += line;
+  }
+  return out;
+}
+
+void GlVideo::dump_upscale_at(const std::string& prefix, std::uint64_t run) {
+  for (int model = 0; model < int(upscalers_.size()); ++model)
+    upscalers_[std::size_t(model)].dump_at(prefix + "-" + upscalers::name(model), run);
 }
 
 void GlVideo::end_present() {

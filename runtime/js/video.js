@@ -7,6 +7,7 @@ import {createElement, forwardRef, useEffect, useImperativeHandle, useLayoutEffe
 import {openVideo} from './native.js';
 
 const FITS = {contain: 0, cover: 1, stretch: 2};
+const upscaleModel = upscale => (upscale === true ? 'artcnn' : upscale || '');
 
 /**
  * React Native Video's core props. `source` is an app path (/app0/..., /download0/...) or an http(s)
@@ -17,10 +18,12 @@ const FITS = {contain: 0, cover: 1, stretch: 2};
  * changes. `subtitles` adds text subtitle files ({uri, language, title}) as tracks; `subtitleTrack`
  * picks the track shown (an index from subtitleTracks, -1 for none). `audioDelay` (seconds, -2 to 2) plays
  * the sound that much later than the picture, to match a TV's own delay. The ref seeks, selects an audio
- * track and reads the status.
+ * track and reads the status. `upscale` names a network for animation that doubles a picture shown
+ * bigger than its source ('artcnn' or true, 'anime4k-s', 'anime4k-m', 'anime4k-l', 'anime4k-vl',
+ * 'anime4k-ul'), where the GPU runs compute shaders (the PS5); elsewhere it scales as before.
  */
 export const Video = forwardRef(function Video(props, ref) {
-  const {source, paused = false, muted = false, volume = 1, repeat = false, resizeMode = 'contain', audio = true,
+  const {source, paused = false, muted = false, volume = 1, repeat = false, resizeMode = 'contain', upscale = false, audio = true,
          startTime = 0, audioDelay = 0, progressUpdateInterval = 250, subtitles, subtitleTrack = -1, onLoad, onProgress, onBuffer, onSeek,
          onEnd, onError, onStatus, onSubtitle, style, ...rest} = props;
   const uri = typeof source === 'string' ? source : source?.uri;
@@ -69,6 +72,7 @@ export const Video = forwardRef(function Video(props, ref) {
     };
     const player = openVideo(uri, {paused, muted, volume, loop: repeat, start: startTime, audio, headers}, listener);
     player.setResizeMode(FITS[resizeMode] ?? 0);
+    player.setUpscale(upscaleModel(upscale));
     player.setAudioDelay(audioDelay);
     for (const file of subtitles ?? []) player.addSubtitle(file);
     player.selectSubtitleTrack(subtitleTrack);
@@ -86,6 +90,7 @@ export const Video = forwardRef(function Video(props, ref) {
   useEffect(() => { self.current.player?.setLoop(repeat); }, [repeat]);
   useEffect(() => { self.current.player?.setAudioDelay(audioDelay); }, [audioDelay]);
   useEffect(() => { self.current.player?.setResizeMode(FITS[resizeMode] ?? 0); }, [resizeMode]);
+  useEffect(() => { self.current.player?.setUpscale(upscaleModel(upscale)); }, [upscale]);
   useEffect(() => { self.current.player?.selectSubtitleTrack(subtitleTrack); }, [subtitleTrack]);
 
   useImperativeHandle(ref, () => ({

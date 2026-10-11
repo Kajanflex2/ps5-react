@@ -294,6 +294,13 @@ bool run_proof() {
       if (std::fgets(text, sizeof text, file) && !std::strncmp(text, "textures", 8)) presenter.set_video_upload(false);
       std::fclose(file);
     }
+    // A test deploy may dump the upscaler's input and output at its Nth frame with dev/upscale-dump.txt "N".
+    if (FILE* file = std::fopen(dev_path("upscale-dump.txt").c_str(), "rb")) {
+      char text[16] = {};
+      if (std::fgets(text, sizeof text, file) && std::atoi(text) > 0)
+        presenter.video().dump_upscale_at(dev_path("upscale"), std::uint64_t(std::atoi(text)));
+      std::fclose(file);
+    }
     async_log::write("[PS5-REACT] video upload=%s",
                      presenter.video().upload_mode() == GlVideo::Upload::storage ? "storage" : "textures");
     async_log::write("[PS5-REACT] software framebuffer=%d %dx%d", ok, width, height);
@@ -403,6 +410,8 @@ bool run_proof() {
           wall_before = wall_us;
           async_log::write("[PS5-REACT] video upload %.1f MiB in %.1f ms, process cpu %.2f cores", bytes / 1048576.0,
                            us / 1000.0, cores);
+          if (const std::string upscale = presenter.video().take_upscale_log(); !upscale.empty())
+            async_log::write("[PS5-REACT] video upscale %s", upscale.c_str());
           std::size_t start = 0;
           while (start < videos.size()) {
             const std::size_t end = videos.find('\n', start);

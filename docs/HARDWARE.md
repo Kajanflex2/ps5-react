@@ -325,6 +325,32 @@ folder. The TV was off, so nothing was seen or heard: the evidence is the host's
 - **Not checked.** Picture and sound on a TV, A/V sync by eye or ear, playback longer than six
   minutes, a real Jellyfin server.
 
+## Video upscalers and 10-bit pictures — 2026-10-11
+
+Firmware 13.60, kstuff, etaHEN and ShadowMountPlus. `apps/video-lab` built as the test identity
+`PPSA99063` from the `artcnn-spike` branch (executable SHA-256 `bafa433c64f3a108d135633932a8374528b1c921b811e30755f50a78e028e1f8`), playing 1920×1080
+and 1280×720 24 fps encodes of Big Buck Bunny from the title folder with `dev/playlist.txt`, the TV
+on.
+
+- **10-bit.** A 1920×1080 HEVC Main 10 clip showed green from start to end. The decoder's luma,
+  copied out on the GPU, peaked at 4 of 255 where an 8-bit encode of the same frames reaches 242:
+  `sceVideodec2` writes 10-bit samples low in their 16-bit words, and the presenter read them as
+  P010 (high). Read as low-aligned (`nv12_10`), the luma peaks at 242 (the picture on the TV not yet confirmed).
+- **Correctness.** The ArtCNN C4F16 output of a 1920×1080 frame (H.264 and HEVC Main 10), read
+  back from the GPU, against the ArtCNN ONNX model run on the same input with ONNX Runtime on a
+  Mac: at most 1/255 apart (H.264; 3/255 for the 10-bit frame, whose reference input was rounded
+  to 8 bits), 62.6 dB. Anime4K has no reference model; its outputs stay within 45–47 dB of a
+  bilinear doubling with the same mean, as a residual on it should.
+- **GPU time** per picture, from `GL_TIME_ELAPSED` queries around the passes, 1920×1080 to
+  3840×2160: ArtCNN 12.5 ms (6.1 ms from 1280×720), Anime4K S about 3, M 4.1, L 6.2, VL 12.0,
+  UL 20.0 (10.0 from 1280×720).
+- **Display rate.** With every pass in the display frame its picture is due, ArtCNN took the
+  presenter from 60 to 36 frames a second (each new picture missed a vsync). Split over two display
+  frames: 60 for ArtCNN and Anime4K S to VL with 1080p sources, 52–58 for Anime4K UL (its longest
+  half 13 ms), 60 for UL with a 720p source. 0 pictures dropped once a model was compiled.
+- **Compiling** a model the first time it is used holds the render thread 0.5–0.8 s; the player
+  dropped 18–37 pictures then.
+
 ## Not yet validated
 
 - `Power.keepAwake` (ABI v4, `sceSystemServicePowerTick` every 30 s): builds,

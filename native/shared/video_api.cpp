@@ -29,6 +29,7 @@ struct Entry {
   std::unique_ptr<video::Player> player;
   std::string name; // the placeholder image the <Video> element draws, and the presenter replaces
   GlVideo::Fit fit = GlVideo::Fit::contain;
+  int upscale = upscalers::kNone;
   bool audio = true;
 };
 
@@ -221,6 +222,19 @@ JSValue set_fit(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   return JS_UNDEFINED;
 }
 
+JSValue set_upscale(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+  Entry* entry = argc >= 2 ? entry_arg(ctx, argv[0], "video.setUpscale") : nullptr;
+  if (!entry) return argc >= 2 ? JS_EXCEPTION : JS_ThrowTypeError(ctx, "video.setUpscale: expected id and model");
+  const char* name = JS_ToCString(ctx, argv[1]);
+  if (!name) return JS_EXCEPTION;
+  const int model = *name ? upscalers::find(name) : upscalers::kNone;
+  const bool known = !*name || model != upscalers::kNone;
+  JS_FreeCString(ctx, name);
+  if (!known) return JS_ThrowRangeError(ctx, "video.setUpscale: '' for none, or %s", upscalers::names().c_str());
+  entry->upscale = model;
+  return JS_UNDEFINED;
+}
+
 JSValue select_subtitle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
   Entry* entry = argc >= 2 ? entry_arg(ctx, argv[0], "video.selectSubtitleTrack") : nullptr;
   std::int32_t index = -1;
@@ -340,6 +354,7 @@ bool find(const char* image_name, Layer& layer) {
     layer.id = entry.id;
     layer.frame = entry.player->frame();
     layer.fit = entry.fit;
+    layer.upscale = entry.upscale;
     return true;
   }
   return false;
@@ -447,7 +462,7 @@ JSValue ps5_react_video_api(JSContext* ctx) {
     {"open", open, 2}, {"close", close, 1}, {"setPaused", set_paused, 2}, {"seek", seek, 2},
     {"setVolume", set_volume, 2}, {"setMuted", set_muted, 2}, {"setLoop", set_loop, 2},
     {"setAudioDelay", set_audio_delay, 2},
-    {"setResizeMode", set_fit, 2}, {"selectAudioTrack", select_audio, 2},
+    {"setResizeMode", set_fit, 2}, {"setUpscale", set_upscale, 2}, {"selectAudioTrack", select_audio, 2},
     {"selectSubtitleTrack", select_subtitle, 2}, {"addSubtitle", add_subtitle, 4}, {"poll", poll, 0},
   };
   for (const auto& function : functions)

@@ -37,6 +37,7 @@ and `<Video>` reports how to turn it on. `apps/video-lab` plays everything in it
 | `source` | An app path (`/app0/...`, `/download0/...`) or an http(s) URL, or `{uri, headers}` with request headers |
 | `paused`, `muted`, `volume` (0–1), `repeat` | Playback controls; change them at any time |
 | `resizeMode` | `'contain'` (default, letterboxed in black), `'cover'` or `'stretch'` |
+| `upscale` | A network for animation that doubles a picture shown bigger than its source, before it is scaled to the box: `'artcnn'` (or `true`; ArtCNN C4F16, the luma only, chroma stays bilinear) or `'anime4k-s'`, `-m`, `-l`, `-vl`, `-ul` (Anime4K Upscale CNN x2, on R'G'B'). Its passes are split over two display frames, so the picture shows one display frame (17 ms) late. Needs compute shaders (the PS5); elsewhere it scales as before. A model compiles the first time it is used (0.5 to 0.8 s on the PS5). One upscaled video at a time |
 | `startTime` | Seconds to start at, for resuming |
 | `audioDelay` | Seconds (-2 to 2) the sound plays later than the picture, to match a TV that shows the picture late; negative for earlier |
 | `audio` | `false` decodes no audio and leaves the mixer to other players (default `true`) |
