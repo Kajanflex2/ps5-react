@@ -9,6 +9,10 @@
   app, at 59 fps. Desktop snapshots are unchanged; PS5 readbacks match the software
   screenshots within 1/255.
 - Hosts neither draw nor swap a frame that changed nothing, and sleep to the next vertical sync.
+- Patch Embedded React (`patches/embeddedReact-slice-by-area.patch`) so a repaint forks across
+  workers once per commit, in bands of about equal damaged area (at least 128 Ki pixels each),
+  instead of once per damage rect across every worker, and wakes only the workers with a band:
+  the same tour went from 0.75 to 0.66 cores with as many slow frames.
 - The frame-time log reports `cpu=` cores and the render thread's CPU ms per frame
   (docs/ANIMATION.md).
 

@@ -49,8 +49,10 @@ pair, and FSELF path used by the hardware-tested proof of concept.
 
 Only a commit's repaint leaves the render thread. `native/shared/render_workers.cpp`
 starts a thread per available CPU, up to `ERUI_RENDER_WORKERS` (8), and the
-engine splits each repainted region of at least 16 rows per worker into
-horizontal slices, one per worker, joined before the commit returns. Each worker
+engine splits each commit's repaint once into horizontal bands, one per worker
+at most, each holding about an equal share of the damaged area and at least 16
+rows and 128 Ki pixels of it, joined before the commit returns; workers without
+a band are not woken. Each worker
 has its own clip stack, opacity strips, transform buffer and damage set, which
 the render thread folds after the join. Vector paths and HarfBuzz-shaped text
 render one call at a time under a lock, and while any view casts a shadow every

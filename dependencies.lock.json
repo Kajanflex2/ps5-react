@@ -38,7 +38,8 @@
       "patches/embeddedReact-translate-copy.patch",
       "patches/embeddedReact-batched-updates.patch",
       "patches/embeddedReact-text-half-leading.patch",
-      "patches/embeddedReact-host-props-cost.patch"
+      "patches/embeddedReact-host-props-cost.patch",
+      "patches/embeddedReact-slice-by-area.patch"
     ]
   },
   "platform": {
