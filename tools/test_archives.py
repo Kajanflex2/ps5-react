@@ -30,11 +30,11 @@ def rar5_block(header,data=b""):
  size=bytes([len(header)])
  return struct.pack("<I",binascii.crc32(size+header))+size+header+data
 
-def rar5_with_window(shift):
- """A RAR5 archive whose only file declares a 128 KiB << shift dictionary."""
+def rar5_with_window(*shifts):
+ """A RAR5 archive whose files, in order, declare 128 KiB << shift dictionaries."""
  data=bytes(64)
- file=bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a"
- return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
+ files=b"".join(rar5_block(bytes([2,2,len(data),0,len(data),0])+vint(3<<7|shift<<10)+bytes([0,1])+b"a",data) for shift in shifts)
+ return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+files+rar5_block(bytes([5,0,0]))
 
 def plain_rar5(name,data,link=None):
  """An unencrypted RAR5 archive storing one file, or a symbolic link to `link`."""
@@ -396,6 +396,9 @@ def main():
   assert inspect(partial("big.rar.part",big_rar,len(big_rar)-40,1<<20))==["rar",TOO_BIG]
   small_rar=rar5_with_window(8)
   assert inspect(partial("small.rar.part",small_rar,len(small_rar)-40,1<<20))==["rar",""]
+  # The walk's time budget still reaches a window declared thousands of files in, read from a local disk.
+  late_rar=rar5_with_window(*[8]*5000,9)
+  assert inspect(partial("late.rar.part",late_rar,len(late_rar)-40,1<<20))==["rar",TOO_BIG]
   assert inspect(rar_parts[0])==["rar",""]
   assert inspect(partial("hole.part",big_rar,0,1<<20))==["",""]
   assert inspect(partial("zip.part",zip.read_bytes(),200))==["zip",""]

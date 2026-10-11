@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,11 @@ constexpr unsigned max_coders = 64;
 const std::string too_much_memory = "This archive needs more memory to extract than the console app can use.";
 const std::string malformed = "Unsupported or incomplete archive.";
 const std::string too_many_entries = "Archive has too many entries.";
+// A RAR's headers sit between its files' data, each a disk read of its own, and inspect() runs on the
+// render thread: walking thousands of them while a download filled the drive held a tester's screen
+// for over 40 s. A partial walk stops at this budget; the extraction's preflight reads every header.
+constexpr auto partial_walk_budget = std::chrono::milliseconds(100);
+bool within(bool partial, std::chrono::steady_clock::time_point deadline) { return !partial || std::chrono::steady_clock::now() < deadline; }
 
 std::uint64_t little_endian(const unsigned char* bytes, unsigned count) {
   std::uint64_t value = 0;
@@ -477,8 +483,8 @@ enum : std::uint64_t { file = 2, service = 3, encryption = 4, end = 5 };
 
 std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  // A partial download stops at its first hole or at a bounded number of headers.
-  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
+  // A partial download stops at its first hole or at the walk's budget.
+  for (const auto deadline = std::chrono::steady_clock::now() + partial_walk_budget; within(partial, deadline);) {
     std::array<unsigned char, 7> prefix{};
     const auto available = std::min<std::uint64_t>(prefix.size(), in.size() - std::min(at, in.size()));
     if (available < 5 || !in.read(at, prefix.data(), available)) break;
@@ -533,7 +539,7 @@ constexpr unsigned stored = 0x30, ppmd_version = 29, ppmd_block = 0x80, ppmd_mem
 // Only blocks at the start of a non-solid file are seen; a PPMd block switched to later is not caught.
 std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
+  for (const auto deadline = std::chrono::steady_clock::now() + partial_walk_budget; within(partial, deadline);) {
     std::array<unsigned char, 32> header{};
     const auto available = std::min<std::uint64_t>(header.size(), in.size() - std::min(at, in.size()));
     if (available < 7 || !in.read(at, header.data(), available)) break;

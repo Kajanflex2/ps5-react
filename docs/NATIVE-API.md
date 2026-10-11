@@ -457,12 +457,14 @@ extract while downloading. Self-extracting executables are refused. This API doe
 register games. Desktop extraction and successful PS5 linking are not console
 execution evidence.
 
-`Archives.inspect(sources)` reads a few headers synchronously and returns
-`{kind, refusal}`. `kind` names the leading bytes: `rar`, `7z`, `zip`, `tar`,
-`tar.gz`, `tar.bz2`, `tar.xz`, `tar.zst`, `pkg` (`\x7FCNT`), `exfat`, `ffpkg` (a
-UFS2 superblock), `ffpfs`, `ffpfsc`, or `''`. For an archive, `refusal` is the
-decoder-memory message above when the headers read so far already declare a
-window over 64 MiB: a RAR's first file header, or an xz/zstd first block. It
+`Archives.inspect(sources)` reads headers synchronously, for about 100 ms at
+most, and returns `{kind, refusal}`. `kind` names the leading bytes: `rar`, `7z`,
+`zip`, `tar`, `tar.gz`, `tar.bz2`, `tar.xz`, `tar.zst`, `pkg` (`\x7FCNT`),
+`exfat`, `ffpkg` (a UFS2 superblock), `ffpfs`, `ffpfsc`, or `''`. For an archive,
+`refusal` is the decoder-memory message above when the headers read so far
+already declare a window over 64 MiB: the RAR file headers walked within that
+time (each sits after the previous file's data, so a volume of many files may be
+cut short; the extraction reads them all), or an xz/zstd first block. It
 works on a download's growing `.part` file: a hole or a missing end is not an
 error, so a first volume can be refused before the remaining volumes download.
 7z and ZIP keep their directories at the end and show no refusal until complete.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — bounded archive inspection
+
+- `Archives.inspect` walks a RAR's headers for about 100 ms at most, instead of up to 4096 of them.
+  Each header sits after the previous file's data, so on a large volume each is a disk read of its
+  own: on a tester's console, inspecting a game archive while it downloaded at ~105 MB/s held the
+  render thread for over 40 s. The extraction's preflight still reads every header.
+
 ## Unreleased — extracted file permissions
 
 - Archives extracted in the app (ZIP, 7z, TAR, and RAR when rar-extract cannot start) write folders
