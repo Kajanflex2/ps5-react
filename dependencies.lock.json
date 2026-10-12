@@ -147,6 +147,10 @@
   "ffmpeg": {
     "version": "7.1.5",
     "url": "https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz",
-    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
+    "sha256": "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f",
+    "patches": [
+      "patches/ffmpeg-mov-hls-seek.patch",
+      "patches/ffmpeg-hls-init-section.patch"
+    ]
   }
 }
