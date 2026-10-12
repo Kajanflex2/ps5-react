@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,10 @@
 #include <unistd.h>
 
 namespace archives {
+// A RAR's headers sit between its files' data, each a disk read of its own, and inspect() runs on the
+// render thread: walking thousands of them while a download filled the drive held a tester's screen
+// for over 40 s.
+std::chrono::milliseconds inspect_budget{100};
 namespace {
 // libarchive sizes its decoder windows from the archive and has no memory limit option, while the title
 // shares one heap (128 MiB on a console that leaves little flexible memory) and a failed allocation
@@ -30,6 +35,11 @@ constexpr unsigned max_coders = 64;
 const std::string too_much_memory = "This archive needs more memory to extract than the console app can use.";
 const std::string malformed = "Unsupported or incomplete archive.";
 const std::string too_many_entries = "Archive has too many entries.";
+// A partial walk always reaches the first file header, then stops at the first header it starts past
+// the budget.
+bool within(bool partial, bool file_seen, std::chrono::steady_clock::time_point deadline) {
+  return !partial || !file_seen || std::chrono::steady_clock::now() < deadline;
+}
 
 std::uint64_t little_endian(const unsigned char* bytes, unsigned count) {
   std::uint64_t value = 0;
@@ -477,8 +487,9 @@ enum : std::uint64_t { file = 2, service = 3, encryption = 4, end = 5 };
 
 std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  // A partial download stops at its first hole or at a bounded number of headers.
-  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
+  // A partial download stops at its first hole or at the walk's budget.
+  bool file_seen = false;
+  for (const auto deadline = std::chrono::steady_clock::now() + inspect_budget; within(partial, file_seen, deadline);) {
     std::array<unsigned char, 7> prefix{};
     const auto available = std::min<std::uint64_t>(prefix.size(), in.size() - std::min(at, in.size()));
     if (available < 5 || !in.read(at, prefix.data(), available)) break;
@@ -505,6 +516,7 @@ std::string check(Volumes& in, bool partial) {
       // libarchive allocates both a window and an equally sized filter buffer for every compressed file.
       if (!(file_flags & 1) && method) memory = std::max(memory, 2 * (window_unit << ((compression >> 10) & 0x1F)));
     }
+    file_seen = file_seen || type == file;
     if (!cursor.ok) return partial ? fits(memory) : malformed;
     at = header_at + header_size;
     if (data_size > in.size() - std::min(at, in.size())) break;
@@ -533,7 +545,8 @@ constexpr unsigned stored = 0x30, ppmd_version = 29, ppmd_block = 0x80, ppmd_mem
 // Only blocks at the start of a non-solid file are seen; a PPMd block switched to later is not caught.
 std::string check(Volumes& in, bool partial) {
   std::uint64_t at = signature.size(), memory = 0;
-  for (unsigned headers = 0; !partial || headers < 4096; ++headers) {
+  bool file_seen = false;
+  for (const auto deadline = std::chrono::steady_clock::now() + inspect_budget; within(partial, file_seen, deadline);) {
     std::array<unsigned char, 32> header{};
     const auto available = std::min<std::uint64_t>(header.size(), in.size() - std::min(at, in.size()));
     if (available < 7 || !in.read(at, header.data(), available)) break;
@@ -557,6 +570,7 @@ std::string check(Volumes& in, bool partial) {
           (first[0] & ppmd_block) && (first[0] & ppmd_memory))
         memory = std::max<std::uint64_t>(memory, (first[1] + 1ULL) * mib);
     }
+    file_seen = file_seen || type == file;
     if (size + data > in.size() - std::min(at, in.size())) break;
     at += size + data;
     if (type == end) {

@@ -14,7 +14,9 @@
 // <path>" once a file is on disk and synced, "d <bytes>" first with the unpacked size of every file when
 // all volumes are there and their headers read, "s" once every file is decoded and only writes and fsyncs are
 // left, "t <key>=<value>..." with where the time went (an engine that does not know a line or a key ignores
-// it), then "ok", "cancelled" or "fail <reason>".
+// it), then "ok", "cancelled" or "fail <reason>". A set whose last volume is not the last fails before any
+// decoding with "fail Incomplete RAR archive or missing volume.", one whose first is not the first with
+// "fail Missing first RAR volume."; the app reads these two exactly.
 #include "rar.hpp"
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -41,6 +43,7 @@ constexpr size_t max_queued_files = 32;
 constexpr unsigned max_depth = 128;
 constexpr uint64 progress_ns = 250000000;
 const char* too_much_memory = "This archive needs more memory to extract than the console app can use.";
+const char* missing_first = "Missing first RAR volume.";
 
 struct Options {
   unsigned threads = 0;
@@ -390,19 +393,22 @@ struct Session {
   Writer writer;
   // `reading` is the index of the volume UnRAR is reading, the count of them once it wants one past the last.
   size_t next_volume = 1, reading = 0;
-  bool writing = false, missing_volume = false, missing_password = false;
+  bool writing = false, missing_volume = false, missing_password = false, last_checked = false, last_cut = false;
   const Archive* archive = nullptr;
   uint64 written = 0, last_report = 0;
   std::string error;
 };
 
-// Progress, and a look for "cancel", a few times a second.
+void check_last(Session& session);
+
+// Progress, a look for "cancel" and, while a set downloads, for its last volume, a few times a second.
 void heartbeat(Session& session) {
   const uint64 now = now_ns();
   if (now - session.last_report < progress_ns) return;
   session.last_report = now;
   say("p " + std::to_string(session.written));
   if (stop_requested()) cancelled = true;
+  check_last(session);
 }
 
 // The app renames a volume to its final name once it is complete; until then, progress and a look for
@@ -418,7 +424,7 @@ bool await_volume(Session& session, const std::string& path) {
       return false;
     }
     heartbeat(session);
-    if (cancelled) return false;
+    if (cancelled || !session.error.empty()) return false;
     usleep(250000);
   }
 }
@@ -437,7 +443,7 @@ int CALLBACK callback(UINT message, LPARAM user, LPARAM p1, LPARAM p2) {
       session.written += size;
       if (!session.writer.append(reinterpret_cast<const byte*>(p1), size)) return -1;
       heartbeat(session);
-      return cancelled ? -1 : 1;
+      return cancelled || !session.error.empty() ? -1 : 1;
     }
     case UCM_NEXTVOLUMEW: {
       // Volumes are exactly the engine's list, in order, whatever their names.
@@ -531,6 +537,7 @@ std::string extract(Session& session, CommandData& command, Archive& archive, Cm
   while (true) {
     heartbeat(session);
     if (cancelled) return {};
+    if (!session.error.empty()) return session.error;
     const size_t header_size = archive.SearchBlock(HEAD_FILE);
     if (header_size == 0) {
       if (archive.Volume && archive.GetHeaderType() == HEAD_ENDARC && archive.EndArcHead.NextVolume) {
@@ -592,16 +599,19 @@ std::string extract(Session& session, CommandData& command, Archive& archive, Cm
   }
 }
 
+void use_password(CommandData& command, const Options& options) {
+  if (options.password.empty()) return;
+  std::wstring password;
+  UtfToWide(options.password.c_str(), password);
+  command.Password.Set(password.c_str());
+}
+
 // The unpacked size of every file in the set, from each volume's headers; 0 while volumes are still
 // downloading or when one cannot be read, and the engine keeps its own estimate.
 uint64 declared_total(const Options& options) {
   if (options.wait) return 0;
   CommandData command;
-  if (!options.password.empty()) {
-    std::wstring password;
-    UtfToWide(options.password.c_str(), password);
-    command.Password.Set(password.c_str());
-  }
+  use_password(command, options);
   uint64 total = 0;
   try {
     for (const auto& path : options.sources) {
@@ -627,10 +637,11 @@ uint64 declared_total(const Options& options) {
 }
 
 // The volume to blame for a set that ended early or failed its checksum, 1-based, or 0 when none stands
-// out. A set's volumes are all one size but the last, so a shorter one was cut off; otherwise, for an
-// early end, the volume UnRAR was reading.
+// out: the last if its headers run past its end; else, as a set's volumes are all one size but the last, a
+// shorter one, cut off; otherwise, for an early end, the volume UnRAR was reading.
 size_t suspect_volume(const Session& session, bool early_end) {
   const auto& sources = session.options.sources;
+  if (session.last_cut) return sources.size();
   std::vector<uint64> sizes;
   for (const auto& path : sources) {
     struct stat st;
@@ -640,6 +651,86 @@ size_t suspect_volume(const Session& session, bool early_end) {
   for (size_t i = 0; i + 1 < sizes.size(); ++i)
     if (sizes[i] < full) return i + 1;
   return early_end && session.reading < sources.size() ? session.reading + 1 : 0;
+}
+
+// What a volume's own headers say about its place in the set. Not known when they cannot be read for a
+// reason the extraction names better: no password, a wrong one, not a RAR volume. `whole` once every
+// header and entry fits in the file: a volume cut short says nothing about what follows it. `cut` when an
+// entry or the header after it runs past the file's end; a header damaged within the file is not a cut.
+struct Place {
+  bool known = false, whole = false, cut = false, first = true, last = true;
+};
+
+Place place_of(const Options& options, const std::string& path) {
+  // A streamed set is checked while UnRAR decodes; its error state stays the decoder's.
+  const ErrorHandler saved = ErrHandler;
+  Place place;
+  try {
+    CommandData command;
+    use_password(command, options);
+    std::wstring name;
+    UtfToWide(path.c_str(), name);
+    Archive archive(&command);
+    if (archive.Open(name) && archive.IsArchive(false) && archive.Format != RARFMT14) {
+      bool entries = false, split_before = false, split_after = false, ended = false;
+      int64 entry_end = 0;
+      while (archive.ReadHeader() > 0) {
+        const HEADER_TYPE type = archive.GetHeaderType();
+        if (type == HEAD_ENDARC) {
+          ended = true;
+          break;
+        }
+        if (type == HEAD_FILE || type == HEAD_SERVICE) {
+          const FileHeader& header = type == HEAD_FILE ? archive.FileHead : archive.SubHead;
+          if (!entries) split_before = header.SplitBefore;
+          entries = true;
+          split_after = header.SplitAfter;
+          entry_end = archive.NextBlockPos;
+        }
+        archive.SeekToNext();
+      }
+      // RAR4 has no password check: a header cut short fails to decrypt as with a wrong password, but only
+      // after the right one decrypted the entries before it.
+      if (!archive.FailedHeaderDecryption || entries) {
+        place.known = true;
+        // Reading stops at the end block, or where no whole header is left: the file's end if nothing is cut.
+        const int64 size = archive.FileLength();
+        place.whole = !archive.BrokenHeader && entry_end <= size && (ended || archive.CurBlockPos >= size);
+        place.cut = entry_end > size || (!ended && archive.CurBlockPos < size && archive.Tell() >= size);
+        if (archive.Format == RARFMT50) {
+          place.first = !archive.Volume || archive.VolNumber == 0;
+          place.last = !archive.Volume || (ended && !archive.EndArcHead.NextVolume);
+        } else {
+          // RAR 2.x volumes have no first volume flag; RAR 3 and later ones number themselves in their end block.
+          const bool numbered = ended && archive.EndArcHead.StoreVolNumber && archive.EndArcHead.VolNumber;
+          place.first = !archive.Volume || (archive.MainHead.Flags & MHD_FIRSTVOLUME) || !(split_before || numbered);
+          // Without an end block (RAR 2.x, or "-en"), the last entry tells.
+          place.last = ended ? !archive.EndArcHead.NextVolume : entries && !split_after;
+        }
+      }
+    }
+  } catch (...) {
+  }
+  ErrHandler = saved;
+  return place;
+}
+
+// A set that lacks its last volume would otherwise fail only once every other volume is decoded, hours later
+// on the console. A last volume cut short fails as before, named, so that one is downloaded again. A
+// streamed set's last volume is checked once it is there.
+void check_last(Session& session) {
+  const std::string& path = session.options.sources.back();
+  struct stat st;
+  if (session.last_checked || (session.options.wait && (lstat(path.c_str(), &st) || !S_ISREG(st.st_mode) || !st.st_size))) return;
+  session.last_checked = true;
+  const Place place = place_of(session.options, path);
+  session.last_cut = place.known && place.cut;
+  if (place.known && place.whole && !place.last) session.error = describe(ERAR_EOPEN);
+}
+
+void check_first(Session& session) {
+  const Place place = place_of(session.options, session.options.sources.front());
+  if (place.known && !place.first) session.error = missing_first;
 }
 
 std::string run(Session& session) {
@@ -652,11 +743,7 @@ std::string run(Session& session) {
   command.UserData = LPARAM(&session);
   command.Threads = pick_threads(options.threads);
   command.WinSizeLimit = options.window;
-  if (!options.password.empty()) {
-    std::wstring password;
-    UtfToWide(options.password.c_str(), password);
-    command.Password.Set(password.c_str());
-  }
+  use_password(command, options);
   std::wstring name;
   UtfToWide(options.sources.front().c_str(), name);
   command.AddArcName(name);
@@ -697,9 +784,15 @@ int main() {
   {
     Session session{options};
     try {
-      if (const uint64 total = declared_total(options)) say("d " + std::to_string(total));
-      ErrHandler.Clean();
-      error = run(session);
+      check_last(session);
+      if (session.error.empty()) check_first(session);
+      if (session.error.empty()) {
+        if (const uint64 total = declared_total(options)) say("d " + std::to_string(total));
+        ErrHandler.Clean();
+        error = run(session);
+      } else {
+        error = session.error;
+      }
     } catch (RAR_EXIT code) {
       error = !session.error.empty() ? session.error : session.writer.error();
       if (error.empty() && !cancelled) error = code == RARX_MEMORY ? too_much_memory : describe(ERAR_UNKNOWN);
@@ -723,9 +816,11 @@ int main() {
       if (session.missing_password) error = describe(ERAR_MISSING_PASSWORD);
       else if (session.missing_volume) error = describe(ERAR_EOPEN);
     }
-    // Which volume, so that one alone is downloaded again: "... Volume 6 of 12 looks incomplete."
-    const bool early_end = error == describe(ERAR_EOPEN) || error == describe(ERAR_EREAD);
-    if (!cancelled && session.options.sources.size() > 1 && (early_end || error == describe(ERAR_BAD_DATA)))
+    // Which volume, so that one alone is downloaded again: "... Volume 6 of 12 looks incomplete." A volume
+    // check's reason stands as it is. A last volume cut in its end block fails with no more precise reason.
+    const bool early_end = error == describe(ERAR_EOPEN) || error == describe(ERAR_EREAD) ||
+                           (session.last_cut && error == describe(ERAR_UNKNOWN));
+    if (!cancelled && session.error.empty() && session.options.sources.size() > 1 && (early_end || error == describe(ERAR_BAD_DATA)))
       if (const size_t volume = suspect_volume(session, early_end))
         error += " Volume " + std::to_string(volume) + " of " + std::to_string(session.options.sources.size()) + " looks incomplete.";
   }
