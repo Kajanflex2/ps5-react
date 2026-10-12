@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased — RAR sets checked before decoding
+## Unreleased — render thread freed during downloads, RAR sets checked before decoding
 
+- `Archives.inspect` reads a RAR's first file header, then walks the next ones for about 100 ms
+  (plus the header under way), instead of up to 4096 of them. Each header sits after the previous
+  file's data, so on a large volume each is a disk read of its own: on a tester's console, inspecting
+  a game archive while it downloaded at ~105 MB/s held the render thread for over 40 s. A header the
+  walk misses is still refused before anything is extracted: by the preflight, or in a set extracted
+  while it downloads (also checked with `inspect`), by the RAR worker.
+- `FileSystem.removeAsync(path)` removes a file, or a directory and everything in it, on a worker
+  thread and returns a promise: a path already gone resolves, a failure rejects with the path and the
+  system error. On a tester's console, `fs.remove` of a large download held the screen for 5 s.
 - rar-extract reads the end block of a set's last volume and the header of its first before decoding,
   headers decrypted with the set's password. A whole last volume that says more follow (or, in RAR5, has
   no end) fails at once with `Incomplete RAR archive or missing volume.`, a first one that is not the first with

@@ -6,6 +6,7 @@
 #include "network.hpp"
 #include "archives.hpp"
 #include "packages.hpp"
+#include "removals.hpp"
 #include "browser_capture.hpp"
 #include "thread_name.hpp"
 #include "app_config.hpp"
@@ -467,6 +468,7 @@ bool run_proof() {
   archives::stop();
   browser_capture::stop();
   packages::stop();
+  removals::stop();
   network::stop();
   if (runtime) er_runtime_shutdown();
   text_shaper::shutdown();

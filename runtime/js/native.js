@@ -78,6 +78,10 @@ export const FileSystem = {
   /** Removes a file, or a directory with everything in it, without following symbolic links.
    * Synchronous: meant for small app-owned trees. @param {string} path */
   removeTree: path => host().fs.removeTree(path),
+  /** Removes as `removeTree` does, on a worker thread, in the order asked. Resolves once the path is
+   * gone, or if it never existed; rejects with an Error naming the path and the system error.
+   * @param {string} path @returns {Promise<void>} */
+  removeAsync: async path => { await networkTask(host().fs.removeAsync(path), 'fs.removeAsync', path, 'removals').done; },
   /** @param {string} from @param {string} to */
   rename: (from, to) => host().fs.rename(from, to),
   /** Sets a file's or directory's permission bits, such as 0o777. */
@@ -355,7 +359,8 @@ export const Archives = Object.freeze({
     return networkTask(id, 'Archives.extract', destination, 'archives');
   },
   /** What the files' leading bytes are, and why their headers so far already rule out extraction.
-   * Reads a few headers synchronously; also works on a download's growing `.part` file.
+   * Reads headers synchronously: a RAR's first file header, then more for about 100 ms and one header past it.
+   * Also works on a download's growing `.part` file.
    * @param {string[]} sources ordered volumes @returns {{kind: string, refusal: string}} */
   inspect: sources => host().archives.inspect(sources),
   /** Whether `extract` takes `stream`. */

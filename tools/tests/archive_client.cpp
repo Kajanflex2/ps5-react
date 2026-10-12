@@ -25,7 +25,9 @@ bool archives::list_directory(const char* path,void(*visit)(const char*,void*),v
  DIR* d=opendir(path);if(!d)return false;while(auto* e=readdir(d))visit(e->d_name,user);closedir(d);return true;}
 int main(int argc,char** argv){
  if(argc>2&&std::string(argv[1])=="inspect"){
-  const auto inspection=archives::inspect(std::vector<std::string>(argv+2,argv+argc));
+  int first=2;
+  if(argc>4&&std::string(argv[2])=="--budget"){archives::inspect_budget=std::chrono::milliseconds(std::stol(argv[3]));first=4;}
+  const auto inspection=archives::inspect(std::vector<std::string>(argv+first,argv+argc));
   std::cout<<inspection.kind<<"\n"<<inspection.refusal<<"\n";return 0;}
  if(argc<4)return 2;
  archives::Request request;request.destination=argv[1];request.max_bytes=std::stoull(argv[2]);

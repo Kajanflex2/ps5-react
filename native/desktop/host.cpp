@@ -5,6 +5,7 @@
 #include "image_loader.hpp"
 #include "archives.hpp"
 #include "packages.hpp"
+#include "removals.hpp"
 #include "browser_capture.hpp"
 #include "app_config.hpp"
 #define SDL_MAIN_HANDLED
@@ -145,6 +146,7 @@ struct Host {
     archives::stop();
     browser_capture::stop();
   packages::stop();
+  removals::stop();
   network::stop();
     if (runtime_started) er_runtime_shutdown();
     text_shaper::shutdown();

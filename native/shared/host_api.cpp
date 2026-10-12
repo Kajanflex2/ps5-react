@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 #include "host_api.hpp"
+#include "removals.hpp"
 #include "text_shaper.hpp"
 
 extern "C" {
@@ -214,23 +215,32 @@ JSValue fs_remove(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   return status == 0 ? JS_UNDEFINED : path.error("fs.remove");
 }
 
-// A symbolic link is unlinked, never entered, so nothing outside the tree can be reached.
-bool remove_tree(const std::string& path, unsigned depth) {
-  struct stat st;
-  if (lstat(path.c_str(), &st) != 0) return false;
-  if (!S_ISDIR(st.st_mode)) return unlink(path.c_str()) == 0;
-  if (depth == 64) { errno = ELOOP; return false; }
-  std::vector<std::string> names;
-  const auto collect = [](const char* name, void* user) { static_cast<std::vector<std::string>*>(user)->emplace_back(name); };
-  if (!host::read_dir(path.c_str(), collect, &names)) return false;
-  for (const auto& name : names) if (!remove_tree(path + "/" + name, depth + 1)) return false;
-  return rmdir(path.c_str()) == 0;
-}
-
 JSValue fs_remove_tree(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
   Path path(ctx, argv[0]);
-  if (!path || !remove_tree(path.real(), 0)) return path.error("fs.removeTree");
+  if (!path || !removals::remove_tree(path.real(), false)) return path.error("fs.removeTree");
   return JS_UNDEFINED;
+}
+
+JSValue fs_remove_async(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
+  Path path(ctx, argv[0]);
+  if (!path) return path.error("fs.removeAsync");
+  std::string error;
+  const auto id = removals::start(path.real(), error);
+  if (!id) return JS_ThrowPlainError(ctx, "fs.removeAsync %s: %s", path.app(), error.c_str());
+  return JS_NewUint32(ctx, id);
+}
+
+JSValue removals_poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+  JSValue out = JS_NewArray(ctx);
+  std::uint32_t index = 0;
+  for (const auto& snapshot : removals::poll()) {
+    JSValue item = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, item, "id", JS_NewUint32(ctx, snapshot.id));
+    JS_SetPropertyStr(ctx, item, "state", JS_NewString(ctx, snapshot.state.c_str()));
+    JS_SetPropertyStr(ctx, item, "error", JS_NewString(ctx, snapshot.error.c_str()));
+    JS_SetPropertyUint32(ctx, out, index++, item);
+  }
+  return out;
 }
 
 JSValue fs_rename(JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
@@ -455,9 +465,10 @@ JSValue namespace_object(JSContext* ctx, const char* space, const Function (&fun
 constexpr Function kFs[] = {
   {"readDir", fs_read_dir, 1}, {"stat", fs_stat, 1}, {"readFile", fs_read_file, 1},
   {"writeFile", fs_write_file, 4}, {"mkdir", fs_mkdir, 2}, {"remove", fs_remove, 1},
-  {"removeTree", fs_remove_tree, 1},
+  {"removeTree", fs_remove_tree, 1}, {"removeAsync", fs_remove_async, 1},
   {"rename", fs_rename, 2}, {"chmod", fs_chmod, 2}, {"mounts", fs_mounts, 0}, {"diskUsage", fs_disk_usage, 1},
 };
+constexpr Function kRemovals[] = {{"poll", removals_poll, 0}};
 constexpr Function kDevice[] = {{"info", device_info, 0}};
 constexpr Function kUsers[] = {{"foreground", users_foreground, 0}, {"loggedIn", users_logged_in, 0}};
 constexpr Function kPad[] = {
@@ -477,6 +488,7 @@ void ps5_react_install_host_api(JSContext* ctx) {
   JSValue api = namespace_object(ctx, "", kRoot);
   JS_SetPropertyStr(ctx, api, "platform", JS_NewString(ctx, host::platform_name()));
   JS_SetPropertyStr(ctx, api, "fs", namespace_object(ctx, "fs", kFs));
+  JS_SetPropertyStr(ctx, api, "removals", namespace_object(ctx, "removals", kRemovals));
   JS_SetPropertyStr(ctx, api, "device", namespace_object(ctx, "device", kDevice));
   JS_SetPropertyStr(ctx, api, "users", namespace_object(ctx, "users", kUsers));
   JS_SetPropertyStr(ctx, api, "pad", namespace_object(ctx, "pad", kPad));
