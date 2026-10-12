@@ -4,14 +4,15 @@
 """The pinned FFmpeg release (LGPL-3.0-or-later as configured), built static for each host.
 
 Both hosts build the same source with the same components, so the preview decodes what the PS5 does.
-A build is reused while its configure line is unchanged."""
+The lock's patches (backported upstream fixes) are applied in order to the extracted release. A
+build is reused while its configure line and patches are unchanged."""
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import tarfile
 
-from common import DEPS, LOCK, fetch, run
+from common import DEPS, LOCK, ROOT, fetch, run
 
 COMPONENTS = [
     "--disable-everything", "--disable-autodetect", "--disable-programs", "--disable-doc", "--disable-debug",
@@ -30,14 +31,29 @@ COMPONENTS = [
 LIBRARIES = ["libavformat.a", "libavcodec.a", "libswscale.a", "libswresample.a", "libavutil.a"]
 
 
+def patches_digest():
+    """What the lock's patches say, so a source tree or build with other patches is redone."""
+    digest = hashlib.sha256()
+    for patch in LOCK["ffmpeg"].get("patches", ()):
+        digest.update(patch.encode() + b"\0" + (ROOT / patch).read_bytes())
+    return digest.hexdigest() if LOCK["ffmpeg"].get("patches") else ""
+
+
 def source():
-    """Source directory of the pinned release."""
+    """Source directory of the pinned release with the lock's patches applied."""
     pinned = LOCK["ffmpeg"]
     directory = DEPS / f"ffmpeg-{pinned['version']}"
+    marker = directory / ".ps5-react-patches"
+    applied = marker.read_text() if marker.exists() else ""
+    if (directory / "configure").exists() and applied != patches_digest():
+        shutil.rmtree(directory)
     if not (directory / "configure").exists():
         archive = fetch(pinned["url"], DEPS / f"ffmpeg-{pinned['version']}.tar.xz", pinned["sha256"])
         with tarfile.open(archive) as package:
             package.extractall(DEPS, filter="data")
+        for patch in pinned.get("patches", ()):
+            run(["git", "apply", "--whitespace=nowarn", ROOT / patch], cwd=directory)
+        marker.write_text(patches_digest())
     return directory
 
 
@@ -46,7 +62,7 @@ def _build(name, arguments, env=None):
     src = source()
     root = DEPS / f"{src.name}-{name}"
     prefix, build = root / "prefix", root / "build"
-    stamp = hashlib.sha256("\n".join(arguments).encode()).hexdigest()
+    stamp = hashlib.sha256("\n".join([*arguments, patches_digest()]).encode()).hexdigest()
     if (root / "stamp").exists() and (root / "stamp").read_text() == stamp and \
             all((prefix / "lib" / library).exists() for library in LIBRARIES):
         return prefix
