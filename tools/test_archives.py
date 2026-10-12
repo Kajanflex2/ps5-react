@@ -314,9 +314,19 @@ def main():
    single=root/(name+".rar");single.write_bytes(blob)
    assert run(name,[single])[0]=="completed"
    assert (root/name/"game.bin").read_bytes()==DATA
-  # A RAR5 volume without an end block that is whole was not the last one.
+  # A whole RAR5 volume without an end block was not the last one; an archive that is no volume set is.
+  last=root/"rar5-open-no-end.rar";last.write_bytes(rar5_open[-1].read_bytes()[:-8])
+  assert worker([*rar5_open[:-1],last],"DLPSGAME.COM")==["ready","fail "+NO_LAST]
   single=root/"rar5-single-no-end.rar";single.write_bytes(encrypted_rar5(DATA,headers=False)[0][:-8])
-  assert worker([single],"DLPSGAME.COM")==["ready","fail "+NO_LAST]
+  assert run("rar5-single-no-end",[single],password="DLPSGAME.COM")[0]=="completed"
+  assert (root/"rar5-single-no-end/game.ffpfsc").read_bytes()==DATA
+  # A header damaged within the last volume is not a cut: the shorter volume 2 is still the one named.
+  damaged=[root/f"rar5-junk-{i}.rar" for i in range(4)]
+  for i,copy in enumerate(damaged):copy.write_bytes(rar5_open[i].read_bytes())
+  last=damaged[3].read_bytes();damaged[3].write_bytes(last[:-8]+bytes(4)+bytes([3,9,0,0])+last[-8:])
+  damaged[1].write_bytes(damaged[1].read_bytes()[:-3000])
+  result=run("rar5-junk",damaged,password="DLPSGAME.COM")
+  assert result[0]=="failed" and result[-1].endswith("Volume 2 of 4 looks incomplete."),result
   # A last volume cut short (a download stopped early) is not a missing one: it fails as before, named, so
   # the app downloads that volume again. Cut in its data, in a header, and in the end block.
   for name,parts,password in [("rar5-encrypted",real,"fixture-password"),("rar4-encrypted",rar4,"fixture-password"),("rar5-open-headers",rar5_open,"DLPSGAME.COM")]:

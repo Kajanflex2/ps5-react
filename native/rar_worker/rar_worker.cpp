@@ -655,9 +655,10 @@ size_t suspect_volume(const Session& session, bool early_end) {
 
 // What a volume's own headers say about its place in the set. Not known when they cannot be read for a
 // reason the extraction names better: no password, a wrong one, not a RAR volume. `whole` once every
-// header and entry fits in the file: a volume cut short says nothing about what follows it.
+// header and entry fits in the file: a volume cut short says nothing about what follows it. `cut` when an
+// entry or the header after it runs past the file's end; a header damaged within the file is not a cut.
 struct Place {
-  bool known = false, whole = false, first = true, last = true;
+  bool known = false, whole = false, cut = false, first = true, last = true;
 };
 
 Place place_of(const Options& options, const std::string& path) {
@@ -693,10 +694,12 @@ Place place_of(const Options& options, const std::string& path) {
       if (!archive.FailedHeaderDecryption || entries) {
         place.known = true;
         // Reading stops at the end block, or where no whole header is left: the file's end if nothing is cut.
-        place.whole = !archive.BrokenHeader && entry_end <= archive.FileLength() && (ended || archive.CurBlockPos >= archive.FileLength());
+        const int64 size = archive.FileLength();
+        place.whole = !archive.BrokenHeader && entry_end <= size && (ended || archive.CurBlockPos >= size);
+        place.cut = entry_end > size || (!ended && archive.CurBlockPos < size && archive.Tell() >= size);
         if (archive.Format == RARFMT50) {
           place.first = !archive.Volume || archive.VolNumber == 0;
-          place.last = ended && !archive.EndArcHead.NextVolume;
+          place.last = !archive.Volume || (ended && !archive.EndArcHead.NextVolume);
         } else {
           // RAR 2.x volumes have no first volume flag; RAR 3 and later ones number themselves in their end block.
           const bool numbered = ended && archive.EndArcHead.StoreVolNumber && archive.EndArcHead.VolNumber;
@@ -721,7 +724,7 @@ void check_last(Session& session) {
   if (session.last_checked || (session.options.wait && (lstat(path.c_str(), &st) || !S_ISREG(st.st_mode) || !st.st_size))) return;
   session.last_checked = true;
   const Place place = place_of(session.options, path);
-  session.last_cut = place.known && !place.whole;
+  session.last_cut = place.known && place.cut;
   if (place.known && place.whole && !place.last) session.error = describe(ERAR_EOPEN);
 }
 
