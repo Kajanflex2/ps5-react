@@ -5,6 +5,8 @@ from rar_worker import build_host
 ROOT=Path(__file__).resolve().parents[1]
 DATA=bytes(range(256))*1024
 TOO_BIG="This archive needs more memory to extract than the console app can use."
+NO_LAST="Incomplete RAR archive or missing volume."
+NO_FIRST="Missing first RAR volume."
 
 def number7z(v):
  for n in range(8):
@@ -44,6 +46,14 @@ def plain_rar5(name,data,link=None):
  fields=vint(4)+vint(len(data))+vint(0)+struct.pack("<I",binascii.crc32(data))+vint(0)+vint(1)+vint(len(name.encode()))+name.encode()
  file=vint(2)+vint(3 if extra else 2)+(vint(len(extra)) if extra else b"")+vint(len(data))+fields+extra
  return b"Rar!\x1a\x07\x01\x00"+rar5_block(bytes([1,0,0]))+rar5_block(file,data)+rar5_block(bytes([5,0,0]))
+
+def plain_rar4(name,data,end=True):
+ """A RAR 1.5-4 archive storing one file, with or without the end block RAR 2.x and "-en" leave out."""
+ def block(kind,flags,fields=b"",data=b""):
+  body=bytes([kind])+struct.pack("<HH",flags,7+len(fields))+fields
+  return struct.pack("<H",binascii.crc32(body)&0xffff)+body+data
+ fields=struct.pack("<IIBIIBBHI",len(data),len(data),3,binascii.crc32(data),0,29,0x30,len(name),0o100644)+name.encode()
+ return b"Rar!\x1a\x07\x00"+block(0x73,0,bytes(6))+block(0x74,0x8000,fields,data)+(block(0x7b,0x4000) if end else b"")
 
 def encrypted_rar5(data,password="DLPSGAME.COM",name="nested/game.ffpfsc",headers=True,volumes=1,compression=0,crypto_flags=1,quick_open=False):
  """Independent RAR5 fixture with AES-CBC data/headers and spec password checks."""
@@ -264,6 +274,50 @@ def main():
   result=run("rar-cut-volume",cut,password="fixture-password")
   assert result[0]=="failed" and result[-1].endswith("Volume 2 of 4 looks incomplete."),result
   assert "Volume 3 of 3 looks incomplete." in run("rar-missing-volume-named",[real[0],real[1],real[3]],password="fixture-password")[-1]
+  # A set without its last or first volume fails before anything is decoded, with exactly these reasons
+  # (the app maps them): RAR5 and RAR4, headers encrypted or not, .partN.rar or .rar/.r00 volumes.
+  def worker(parts,password=None):
+   """rar-extract's own report lines, without progress and timings."""
+   dest=Path(tempfile.mkdtemp(dir=root))
+   request="RARX1\nwindow 33554432\nlimit 1048576\n"+("" if password is None else f"password {password.encode().hex()}\n")
+   request+=f"dest {dest}\n"+"".join(f"source {p}\n" for p in parts)+"end\n"
+   # Its input stays open: the worker reads a closed one as the engine gone.
+   process=subprocess.Popen([os.environ["PS5_REACT_RAR_WORKER"]],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+   process.stdin.write(request);process.stdin.flush()
+   out=process.stdout.read();process.stdin.close();process.wait(timeout=20)
+   return [line for line in out.splitlines() if line[:2] not in ("p ","t ") and line!="k"]
+  rar4=[uudecode(ROOT/f"tools/tests/archives/rar4_encrypted_volumes.{ext}.uu",root/f"rar4_encrypted_volumes.{ext}") for ext in ("rar","r00","r01","r02")]
+  rar5_open=[]
+  for i,blob in enumerate(encrypted_rar5(DATA,headers=False,volumes=4)):
+   volume=root/f"rar5-open-headers.part{i+1}.rar";volume.write_bytes(blob);rar5_open.append(volume)
+  sets=[("rar5-encrypted",real,"fixture-password",words()),("rar4-encrypted",rar4,"fixture-password",words()),
+        ("rar5-open-headers",rar5_open,"DLPSGAME.COM",DATA)]
+  sets.append(("rar4-open",[uudecode(source,root/source.stem) for source in sorted((ROOT/"tools/tests/archives").glob("test_rar_multivolume_single_file.part*.rar.uu"))],None,None))
+  for name,parts,password,content in sets:
+   result=run(name+"-complete",parts,password=password)
+   assert result[0]=="completed",(name,result)
+   if content is not None:assert next((root/(name+"-complete")).rglob("game.*")).read_bytes()==content
+   assert worker(parts[:-1],password)==["ready","fail "+NO_LAST],(name,worker(parts[:-1],password))
+   assert run(name+"-no-last",parts[:-1],password=password)[-1]==NO_LAST
+   assert worker(parts[1:],password)==["ready","fail "+NO_FIRST],(name,worker(parts[1:],password))
+   assert run(name+"-no-first",parts[1:],password=password)[-1]==NO_FIRST
+   assert not (root/(name+"-no-last")).exists() and not (root/(name+"-no-first")).exists()
+  # Headers it cannot read leave the reason to the extraction: a wrong or missing password stays one. RAR4
+  # has no password check, so a wrong one reads as damaged headers, as before.
+  for password in ["wrong",None]:
+   for parts,rar5 in [(real[:-1],True),(rar4[:-1],False)]:
+    result=run("rar-check-password",parts,password=password)
+    expected="checksum" if password and not rar5 else "password"
+    assert result[0]=="failed" and expected in result[-1].lower(),result
+  # Single volumes: RAR4 with and without an end block, and one cut short.
+  for name,blob in [("rar4-single",plain_rar4("game.bin",DATA)),("rar4-single-no-end",plain_rar4("game.bin",DATA,end=False))]:
+   single=root/(name+".rar");single.write_bytes(blob)
+   assert run(name,[single])[0]=="completed"
+   assert (root/name/"game.bin").read_bytes()==DATA
+  single=root/"rar4-single-cut.rar";single.write_bytes(plain_rar4("game.bin",DATA,end=False)[:-100])
+  assert worker([single])==["ready","fail "+NO_LAST]
+  single=root/"rar5-single-cut.rar";single.write_bytes(encrypted_rar5(DATA)[0][:-100])
+  assert worker([single],"DLPSGAME.COM")==["ready","fail "+NO_LAST]
   # Real archive split byte stream: ordered volumes, no temporary joined copy.
   blob=tar.read_bytes();parts=[]
   for i in range(3):
@@ -347,6 +401,15 @@ def main():
   result,_=stream("rar-stream-damaged",damaged,0.3)
   assert result[0]=="failed",result
   assert not (root/"rar-stream-damaged").exists() and not (root/"rar-stream-damaged.extracting").exists()
+  # Extracting while downloading: the first volume is checked at once, the last one as soon as it is there,
+  # however far decoding is.
+  waiting=[root/f"stream-no-last-v{i}" for i in range(4)];waiting[0].write_bytes(real[0].read_bytes())
+  process=subprocess.Popen([str(binary),str(root/"stream-no-last"),str(1024*1024),*map(str,waiting),"--stream","--password","fixture-password"],stdout=subprocess.PIPE,text=True)
+  time.sleep(1);partial=root/"stream-no-last.part";partial.write_bytes(real[2].read_bytes());os.rename(partial,waiting[3])
+  started=time.monotonic();out=process.communicate(timeout=20)[0].splitlines()
+  assert out[0]=="failed" and out[-1]==NO_LAST and time.monotonic()-started<3,out
+  result,_=stream("stream-no-first",[p.read_bytes() for p in real[1:]],None,["--password","fixture-password"])
+  assert result[0]=="failed" and result[-1]==NO_FIRST,result
   result,_=stream("zip-stream",[zip.read_bytes()],None)
   assert result[0]=="failed" and "RAR set" in result[-1],result
   # A worker that goes silent may still write into its staging: the next extraction stages beside it,
