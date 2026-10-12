@@ -128,6 +128,9 @@ struct Transfer {
   // A 200 or 206 that is not the range asked for but carries the file's validators: a proxy or a busy
   // node answering oddly, retried a few times rather than taken for a changed file.
   bool glitch = false;
+  // Opened while its origin cooled down: once answered on a fresh connection, the cooldown ends.
+  bool gated = false;
+  Clock::time_point started{};
   CURLcode result = CURLE_OK;
 };
 
@@ -231,6 +234,13 @@ bool congested(const Transfer& t) {
       return true;
     default: return false;
   }
+}
+
+// The origin turned the connection down before answering anything: TCP or TLS refused, or no reply
+// in time. MediaFire sheds new TLS handshakes this way while its open connections keep streaming.
+bool refused_connection(const Transfer& t) {
+  return !t.status && !t.header_bytes && (t.result == CURLE_COULDNT_CONNECT ||
+    t.result == CURLE_SSL_CONNECT_ERROR || t.result == CURLE_OPERATION_TIMEDOUT);
 }
 
 // A transfer loop pass this long after the previous one means the process was suspended (rest mode,
@@ -556,6 +566,12 @@ const std::string& range_url(const Job& job, unsigned source, unsigned mirror) {
   return job.location.empty() ? job.request.url : job.location;
 }
 
+// An origin that refuses connections cools down for five seconds after the last refusal: new connections
+// one at a time, from a quarter second apart up to four, and splits only onto connections left open by
+// finished ranges, which curl reuses without a handshake. Without it a console opened 121 handshakes into
+// a MediaFire refusal burst and sat at one connection for half a minute.
+constexpr auto cooldown = std::chrono::seconds(5);
+
 // Connections one origin may hold, adapted like TCP congestion control (AIMD). It starts small and
 // grows by half each second while the window is nine-tenths busy and healthy (a console download sat at
 // 25 of 27 for most of a 1.27 GB file, never full at the instant of the check); a 5xx, 429, 408 or broken connection
@@ -563,10 +579,40 @@ const std::string& range_url(const Job& job, unsigned source, unsigned mirror) {
 // ranges past about a dozen connections, while CDNs take all 64.
 struct Window {
   std::string host;
-  unsigned allowed = 0, in_flight = 0;
+  // `idle` counts the connections finished ranges left open, which the next transfers reuse.
+  unsigned allowed = 0, in_flight = 0, refusals = 0, idle = 0;
   bool congested = false;
-  Clock::time_point grown{}, shrunk{}, paused_until{};
-  bool open(Clock::time_point now) const { return in_flight < allowed && now >= paused_until; }
+  Clock::time_point grown{}, shrunk{}, paused_until{}, refused{}, next_connect{};
+  bool open(Clock::time_point now) const { return in_flight < allowed && now >= paused_until && (idle || now >= next_connect); }
+  bool cooling(Clock::time_point now) const { return refusals && now-refused < cooldown; }
+  std::chrono::milliseconds gap() const {
+    static std::minstd_rand random(static_cast<unsigned>(Clock::now().time_since_epoch().count()));
+    const unsigned base = 250u << std::min(refusals-1, 4u);
+    return std::chrono::milliseconds(base/2 + random() % (base/2+1));
+  }
+  // Connections opened together are refused together, so the gap steps once per gap; a refusal after
+  // a quiet cooldown starts over.
+  void refuse(Clock::time_point now) {
+    if (!cooling(now)) refusals = 0;
+    if (now >= next_connect) {
+      refusals = std::min(refusals+1, 5u);
+      platform_log(("download: " + host + " refused a connection; new ones spaced up to " +
+                    std::to_string(250u << (refusals-1)) + " ms").c_str());
+    }
+    refused = now; next_connect = std::max(next_connect, now+gap());
+  }
+  // Whether this transfer needs a new connection, which the cooldown paces.
+  bool connecting(Clock::time_point now) {
+    if (idle) { --idle; return false; }
+    if (cooling(now)) next_connect = now+gap();
+    return true;
+  }
+  // A connection opened at `since` was accepted, with no refusal after: splits and full pacing resume.
+  void accepted(Clock::time_point since) {
+    if (!cooling(since) || refused >= since) return;
+    refused = since-cooldown; next_connect = {};
+    platform_log(("download: " + host + " accepts connections again").c_str());
+  }
   void grow(Clock::time_point now, unsigned limit) {
     if (allowed >= limit || in_flight+allowed/10 < allowed || now-grown < std::chrono::seconds(1) ||
         now-shrunk < std::chrono::seconds(3)) return;
@@ -1365,6 +1411,8 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
     std::vector<Clock::time_point> retry_at(count);
     // Ranges whose suspension-cut failure was logged: the next ones while the network comes back add nothing.
     std::vector<unsigned char> waived(count);
+    // Refused connections a range retried for free while its origin kept streaming other ranges.
+    std::vector<unsigned> forgiven(count);
     // Once every range has a connection, idle connections split the range with the most bytes left
     // (a slow connection's, or the last ones') instead of waiting out the tail. A split range is done
     // when all its parts are (`open`); a part that fails retries alone, as a span.
@@ -1399,6 +1447,7 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
           t.draining = false; --in_flight; --windows[t.window].in_flight;
           if (t.result == CURLE_OK && t.error.empty()) {
             job->committed += t.written;
+            if (!t.cut) ++windows[t.window].idle;
             if (!--open[t.piece]) {
               if (job->ranged) job->completed[t.piece] = 1;
               ++finished;
@@ -1408,9 +1457,20 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             // for the rest of the job and spent an attempt on its way to failing the download.
             if (!waived[t.piece]) { waived[t.piece] = 1; log_failure(t, t.attempt); }
             requeue(t, t.attempt-1, now+retry_delay(t, 1));
+          } else if (refused_connection(t) && forgiven[t.piece] < 16 &&
+                     std::any_of(transfers_.begin(), transfers_.end(), [&](const Transfer& other) {
+                       return other.active && other.window == t.window && other.accepted; })) {
+            // The origin is up and only turning new connections away: the range waits for the cooldown's
+            // pacing without spending an attempt. A host that refuses for good still fails once these run out.
+            ++forgiven[t.piece]; ++job->retries;
+            log_failure(t, t.attempt);
+            if (job->request.adaptive) windows[t.window].shrink(now, 0);
+            windows[t.window].refuse(now);
+            requeue(t, t.attempt-1, now+retry_delay(t, 1));
           } else {
             const unsigned attempt = t.attempt;
             log_failure(t, attempt);
+            if (refused_connection(t)) windows[t.window].refuse(now);
             if (job->request.adaptive && congested(t)) windows[t.window].shrink(now, t.retry_after);
             unsigned allowed_attempts = attempt_limit(t);
             if (forget_mirror(*job, t)) allowed_attempts = std::max(allowed_attempts, 4u);
@@ -1419,6 +1479,12 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             ++job->retries;
             requeue(t, attempt, now+retry_delay(t, attempt));
           }
+        }
+        if (t.active && t.gated && t.status) {
+          t.gated = false;
+          long connects = 0;
+          if (curl_easy_getinfo(t.curl, CURLINFO_NUM_CONNECTS, &connects) == CURLE_OK && connects)
+            windows[t.window].accepted(t.started);
         }
         if (t.active && t.cut && t.accepted == t.length) {
           curl_multi_remove_handle(multi_, t.curl);
@@ -1469,10 +1535,18 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
               t.piece = ready->piece; t.begin = ready->begin; t.length = ready->length;
               t.attempt = ready->attempt+1; spans.erase(ready);
             } else {
+              // A split's fresh connection may be refused again by an origin that refused one: none while it
+              // cools down unless a finished range left a connection open, and only for a tail that would take
+              // the victim over two seconds more.
+              if (windows[window].cooling(now) && !windows[window].idle) continue;
               Transfer* victim = nullptr;
               for (Transfer& other : transfers_) if (other.active && other.length-other.accepted >
                   (victim ? victim->length-victim->accepted : 2*min_split)) victim = &other;
               if (!victim) continue;
+              if (windows[window].refusals && !windows[window].idle) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now-victim->started).count();
+                if (elapsed <= 0 || (victim->length-victim->accepted)*elapsed < 2000*victim->accepted) continue;
+              }
               const auto keep = victim->accepted+(victim->length-victim->accepted)/2;
               t.piece = victim->piece; t.begin = victim->begin+keep; t.length = victim->length-keep;
               victim->length = keep; victim->cut = true;
@@ -1486,6 +1560,8 @@ void Service::run_job(const std::shared_ptr<Job>& job) {
             job->fail(t.error.empty() ? "could not schedule transfer" : t.error); break;
           }
           t.active = true; t.window = window; ++in_flight; ++windows[window].in_flight;
+          const bool fresh = windows[window].connecting(now);
+          t.gated = fresh && windows[window].cooling(now); t.started = now;
         }
       }
       int running = 0;

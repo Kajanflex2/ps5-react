@@ -66,7 +66,7 @@ The input protocol is versioned on its own; it is not the native API's ABI
 version ([NATIVE-API.md](NATIVE-API.md#contract)).
 `globalThis.__ps5ReactDispatch(action)` receives `up`, `down`, `left`, `right`
 (the D-pad and the left stick, with the platform's hold-to-repeat), `confirm`,
-`back`, and, since input protocol v3, `l1`, `r1`, `l2`, `r2`, `triangle`, and `square`
+`back`, and, since input protocol v3, `l1`, `r1`, `l2`, `r2`, `triangle`, `square`, and `options`
 (one action per press, no repeat). For input protocol v1 compatibility the runtime also
 delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
 `useController` handlers only. Both hosts and input scripts take the names from
@@ -100,7 +100,8 @@ frames.
 | `l1`, `r1` | Q, E | L1, R1 |
 | `l2`, `r2` | Z, C | L2, R2 (past half travel on the desktop) |
 | `triangle`, `square` | T, F | Triangle, Square |
-| `options` with `"optionsButton": "app"`, otherwise exit (handled by the host) | Escape, controller Start | Options |
+| `options` | O | Options (Start) |
+| Exit (handled by the host) | Escape | (the PS button) |
 | None: `touchpad` in `Controller.getState()` and [controller events](NATIVE-API.md#controller-events) only | P | Touchpad click |
 
 The keys also hold their buttons in `Controller.getState()`, as a controller's
@@ -187,7 +188,7 @@ express the order you want, and use `nextFocus*` only for exceptions.
 | `row` | A horizontal row (a shelf of cards): Left and Right stop at its ends instead of moving into the rows around it (the move reports `blocked`). Entered for the first time it focuses its `selected` element, or else its first; after that, the one it had, as `restoreFocus` does |
 | `restoreFocus` | Re-entering the scope focuses the element focused when it was left (default `true`) |
 | `onBack` | Handles Circle while focus is inside; return `true` to consume |
-| `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, `square`, and `options` (with `"optionsButton": "app"`) while focus is inside, innermost scope first; return `true` to consume |
+| `onAction` | `(action) => boolean`: handles `l1`, `r1`, `l2`, `r2`, `triangle`, `square`, and `options` while focus is inside, innermost scope first; return `true` to consume |
 | `focusKey` | Name for `focus(key)` on the scope (focuses its remembered element) |
 | `inert` | Takes the scope's subtree out of navigation while true: no candidates, no `autoFocus`, no `focus(key)`; focus inside moves out after the commit |
 

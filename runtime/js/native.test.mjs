@@ -3,7 +3,7 @@
 // Additional attribution term: see LICENSE-ATTRIBUTION.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {acquireImage, Archives, BrowserCapture, Controller, Downloads, Http, LocalNetwork, Power, Sound} from './native.js';
+import {acquireImage, Archives, BrowserCapture, Controller, Downloads, FileSystem, Http, LocalNetwork, Power, Sound} from './native.js';
 import {setFrameBatcher} from './frame.js';
 
 test('native network tasks deliver progress, release listeners and stop polling', async () => {
@@ -53,6 +53,39 @@ test('native network tasks deliver progress, release listeners and stop polling'
     assert.deepEqual(await result.json(), {value: 42});
     assert.equal(await result.text(), '{"value":42}');
     assert.equal(clears, 3);
+  } finally {
+    globalThis.setInterval = originalInterval;
+    globalThis.clearInterval = originalClear;
+    delete globalThis.__ps5ReactNative;
+  }
+});
+
+test('removeAsync resolves once the worker removed the path and rejects with the path and system error', async () => {
+  let tick;
+  let snapshots = [];
+  const started = [];
+  const originalInterval = globalThis.setInterval;
+  const originalClear = globalThis.clearInterval;
+  globalThis.setInterval = callback => { tick = callback; return 1; };
+  globalThis.clearInterval = () => {};
+  globalThis.__ps5ReactNative = {
+    fs: {removeAsync: path => {
+      if (path.includes('..')) throw new Error(`fs.removeAsync ${path}: Path is not allowed`);
+      return started.push(path);
+    }},
+    removals: {poll: () => snapshots},
+  };
+  try {
+    const removed = FileSystem.removeAsync('/download0/game');
+    const refused = FileSystem.removeAsync('/download0/locked');
+    assert.deepEqual(started, ['/download0/game', '/download0/locked']);
+    snapshots = [{id: 1, state: 'removing', error: ''}, {id: 2, state: 'queued', error: ''}];
+    tick();
+    snapshots = [{id: 1, state: 'completed', error: ''}, {id: 2, state: 'failed', error: 'Permission denied'}];
+    tick();
+    assert.equal(await removed, undefined);
+    await assert.rejects(refused, {message: 'fs.removeAsync /download0/locked: Permission denied'});
+    await assert.rejects(FileSystem.removeAsync('/download0/../x'), /Path is not allowed/);
   } finally {
     globalThis.setInterval = originalInterval;
     globalThis.clearInterval = originalClear;
@@ -273,6 +306,8 @@ test('archive and download task IDs are isolated while sharing the polling timer
       assert.throws(() => Archives.extract({sources: ['/download0/file'], destination: '/download0/out', password}), /password/);
     assert.equal(extractions.length, 1);
     archive.cancel(); assert.deepEqual(cancelled, ['archives:1']);
+    archiveSnapshots = [{id: 1, state: 'extracting', phase: 'finishing', written: 50, synced: 1, syncTotal: 3}]; tick();
+    assert.deepEqual([archive.snapshot.phase, archive.snapshot.synced, archive.snapshot.syncTotal], ['finishing', 1, 3]);
     archiveSnapshots = [{id: 1, state: 'completed', written: 50, artifacts: ['game.ffpfsc']}]; tick();
     assert.deepEqual((await archive.done).artifacts, ['game.ffpfsc']);
     assert.equal(download.snapshot.state, 'queued');

@@ -5,6 +5,7 @@
 #include "image_loader.hpp"
 #include "archives.hpp"
 #include "packages.hpp"
+#include "removals.hpp"
 #include "browser_capture.hpp"
 #include "lan.hpp"
 #include "app_config.hpp"
@@ -72,7 +73,7 @@ constexpr std::pair<SDL_Keycode, HostAction> kKeyActions[] = {
   {SDLK_UP, HostAction::up}, {SDLK_DOWN, HostAction::down}, {SDLK_LEFT, HostAction::left},
   {SDLK_RIGHT, HostAction::right}, {SDLK_RETURN, HostAction::confirm}, {SDLK_SPACE, HostAction::confirm},
   {SDLK_BACKSPACE, HostAction::back}, {SDLK_q, HostAction::l1}, {SDLK_e, HostAction::r1},
-  {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square},
+  {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square}, {SDLK_o, HostAction::options},
 };
 // The keys' GamepadState buttons (kButtonNames indexes). Z and C are L2 and R2: full travel, or a light
 // press (kLightTravel, short of the half-travel press) while Shift is down. P is the touchpad.
@@ -100,6 +101,7 @@ constexpr std::pair<SDL_GameControllerButton, HostAction> kButtonActions[] = {
   {SDL_CONTROLLER_BUTTON_A, HostAction::confirm}, {SDL_CONTROLLER_BUTTON_B, HostAction::back},
   {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, HostAction::l1}, {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, HostAction::r1},
   {SDL_CONTROLLER_BUTTON_Y, HostAction::triangle}, {SDL_CONTROLLER_BUTTON_X, HostAction::square},
+  {SDL_CONTROLLER_BUTTON_START, HostAction::options},
 };
 
 float stick(SDL_GameController* controller, SDL_GameControllerAxis axis) {
@@ -180,6 +182,7 @@ struct Host {
     browser_capture::stop();
     lan::stop();
   packages::stop();
+  removals::stop();
   network::stop();
     video_layers::stop();
     if (runtime_started) er_runtime_shutdown();
@@ -857,5 +860,6 @@ int main(int argc, char** argv) {
 
 void archives::trace(const char*, const char*) {}
 std::size_t archives::pipeline_bytes() { return 32 * 1024 * 1024; }
+bool archives::hold_memory(bool hold) { images::hold_memory(hold); return true; }
 bool archives::downloading() { return network::downloading(); }
 bool archives::list_directory(const char* path, void (*visit)(const char*, void*), void* user) { return host::read_dir(path, visit, user); }

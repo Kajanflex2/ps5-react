@@ -19,6 +19,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = bytes(range(256)) * (16 * 1024 * 1024 // 256)
+# /paced serves this at about 2 MB/s per connection, MediaFire's pace, so refusal bursts land mid-download.
+LARGE = DATA * 8
 PIECES = [bytes([19+i]) * size for i, size in enumerate((3*1024*1024+17, 5*1024*1024+31, 7*1024*1024+9))]
 
 
@@ -137,7 +139,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(body)
             return
         piece = re.search(r"/piece([0-2])$", path)
-        payload = PIECES[int(piece[1])] if piece else DATA
+        payload = PIECES[int(piece[1])] if piece else LARGE if path == "/paced" else DATA
         if path.endswith("-mutable") and self.mutated:
             payload = bytes(reversed(DATA))
         total = 4*1024**3 + 1024**2 if path == "/large-offset" else len(payload)
@@ -207,6 +209,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     time.sleep(0.006)
                 if path == "/suspend":
                     time.sleep(0.02)
+                if path == "/paced":
+                    time.sleep(0.03)
                 if path == "/truncated" and selected != "bytes=0-0":
                     self.close_connection = True
                     self.connection.shutdown(socket.SHUT_RDWR)
@@ -225,11 +229,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
+class Refusing(http.server.ThreadingHTTPServer):
+    """A TLS origin that turns new handshakes away like MediaFire: for eight seconds from 1.5 s after
+    `started` while `burst` is set, and every one after the first while `dead`."""
+
+    def __init__(self, context):
+        super().__init__(("127.0.0.1", 0), Handler)
+        self.context = context
+        self.started, self.burst, self.dead = 0.0, False, False
+        self.handshakes, self.refused = 0, []
+
+    def refusing(self):
+        if self.dead: return self.handshakes > 1
+        return self.burst and 1.5 <= time.monotonic()-self.started < 9.5
+
+    def get_request(self):
+        connection, address = self.socket.accept()
+        with Handler.guard:
+            self.handshakes += 1
+            refuse = self.refusing()
+            if refuse: self.refused.append(time.monotonic())
+        if refuse:
+            # A reset in the middle of the handshake: curl reports "SSL connect error", as on the console.
+            connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            connection.close()
+            raise OSError("handshake refused")
+        return self.context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False), address
+
+    def finish_request(self, request, address):
+        try: request.do_handshake()
+        except OSError: return
+        super().finish_request(request, address)
+
+
 def compile_client(directory):
     binary = directory / "client"
     subprocess.run(["clang++", "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
                     "-I", str(ROOT / "native/shared"), str(ROOT / "tools/tests/network_client.cpp"),
-                    str(ROOT / "native/shared/network.cpp"), str(ROOT / "native/desktop/network_platform.cpp"),
+                    str(ROOT / "native/shared/network.cpp"), str(ROOT / "tools/tests/network_test_platform.cpp"),
                     "-lcurl", "-o", str(binary)], check=True)
     return binary
 
@@ -580,7 +617,7 @@ def main():
         certificate, key = directory / "certificate.pem", directory / "key.pem"
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                         "-keyout", str(key), "-out", str(certificate), "-days", "1",
-                        "-subj", "/CN=localhost"], check=True, capture_output=True)
+                        "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
         tls = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certificate, key)
@@ -588,6 +625,43 @@ def main():
         threading.Thread(target=tls.serve_forever, daemon=True).start()
         assert run(f"https://127.0.0.1:{tls.server_port}/json")["state"] == "failed"
         tls.shutdown()
+        # An origin that refuses new TLS handshakes for eight seconds while idle connections split the tails of
+        # its 32 MiB ranges: the download lands byte-identical without a handshake storm, new connections
+        # one at a time. One that refuses for good fails cleanly in bounded time.
+        refusing = Refusing(context)
+        threading.Thread(target=refusing.serve_forever, daemon=True).start()
+
+        def refused_run(path, digest, deadline):
+            result = subprocess.run([str(binary), f"https://127.0.0.1:{refusing.server_port}/paced", str(path), "32", str(1024*1024),
+                                     "0", digest, "GET", "0", "0", "single"], capture_output=True, text=True, timeout=deadline+10,
+                                    env={**os.environ, "NETWORK_TEST_ADAPTIVE": "1", "NETWORK_TEST_CA": str(certificate),
+                                         "NETWORK_TEST_RANGE_BYTES": str(32*1024*1024), "NETWORK_TEST_DEADLINE_MS": str(deadline*1000)})
+            return json.loads(result.stdout), result.stderr
+
+        path = directory / "refused-burst"
+        refusing.started, refusing.burst = time.monotonic(), True
+        out, log = refused_run(path, hashlib.sha256(LARGE).hexdigest(), 60)
+        refusing.burst = False
+        print(f"Refusal burst: {refusing.handshakes} handshakes, {len(refusing.refused)} refused, {out['retries']} retries, "
+              f"{out['milliseconds']} ms")
+        assert out["state"] == "completed", (out, log[-2000:])
+        assert path.read_bytes() == LARGE
+        path.unlink()
+        # The handshakes in flight when the burst began fail together; after them, one at a time.
+        later = [at for at in refusing.refused if at-refusing.refused[0] > 1]
+        assert all(b-a > 0.1 for a, b in zip(later, later[1:])), (refusing.refused, log[-2000:])
+        assert len(refusing.refused) <= 20 and refusing.handshakes <= 40, (refusing.handshakes, refusing.refused)
+
+        path = directory / "refused-forever"
+        refusing.handshakes, refusing.refused, refusing.dead = 0, [], True
+        started = time.monotonic()
+        out, log = refused_run(path, "", 150)
+        elapsed = time.monotonic()-started
+        print(f"Refused forever: failed after {elapsed:.1f} s, {refusing.handshakes} handshakes, {out['retries']} retries")
+        assert out["state"] == "failed" and "SSL connect error" in out["error"], out
+        assert elapsed < 120 and refusing.handshakes <= 200, (elapsed, refusing.handshakes, out)
+        assert not path.exists()
+        refusing.shutdown()
         existing = directory / "existing"
         existing.write_bytes(b"preserve")
         assert run("/file", existing)["state"] == "failed"

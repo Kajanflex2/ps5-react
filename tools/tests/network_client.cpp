@@ -66,6 +66,8 @@ int main(int argc, char** argv) {
   std::string error;
   const auto id = network::enqueue(std::move(request), error);
   if (!id) { std::cerr << error << '\n'; network::stop(); return 4; }
+  const char* deadline = std::getenv("NETWORK_TEST_DEADLINE_MS");
+  const long long deadline_ms = deadline ? std::atoll(deadline) : 15000;
   const auto started = std::chrono::steady_clock::now();
   std::uint64_t peak_buffer = 0;
   unsigned peak_connections = 0;
@@ -76,7 +78,7 @@ int main(int argc, char** argv) {
       std::cout << "{\"state\":\"stopped\",\"peakBuffer\":0,\"peakConnections\":0}\n";
       return 0;
     }
-    if ((cancel_ms && elapsed >= cancel_ms) || elapsed > 15000) network::cancel(id);
+    if ((cancel_ms && elapsed >= cancel_ms) || elapsed > deadline_ms) network::cancel(id);
     for (const auto& result : network::poll()) {
       peak_buffer = std::max(peak_buffer, result.buffered);
       peak_connections = std::max(peak_connections, result.connections);

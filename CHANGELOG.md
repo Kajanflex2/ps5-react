@@ -164,6 +164,32 @@
   element copies only the props it was given and a plain style object is not re-flattened.
 - The frame-time log splits `present` into `upload` and `draw` and reports the kilobytes uploaded
   per frame (docs/ANIMATION.md).
+## Unreleased — render thread freed during downloads, RAR sets checked before decoding
+
+- `Archives.inspect` reads a RAR's first file header, then walks the next ones for about 100 ms
+  (plus the header under way), instead of up to 4096 of them. Each header sits after the previous
+  file's data, so on a large volume each is a disk read of its own: on a tester's console, inspecting
+  a game archive while it downloaded at ~105 MB/s held the render thread for over 40 s. A header the
+  walk misses is still refused before anything is extracted: by the preflight, or in a set extracted
+  while it downloads (also checked with `inspect`), by the RAR worker.
+- `FileSystem.removeAsync(path)` removes a file, or a directory and everything in it, on a worker
+  thread and returns a promise: a path already gone resolves, a failure rejects with the path and the
+  system error. On a tester's console, `fs.remove` of a large download held the screen for 5 s.
+- rar-extract reads the end block of a set's last volume and the header of its first before decoding,
+  headers decrypted with the set's password. A whole last volume that says more follow (or, in RAR5, has
+  no end) fails at once with `Incomplete RAR archive or missing volume.`, a first one that is not the first with
+  `Missing first RAR volume.`, both without the volume suffix. A set lacking its last volume decoded
+  every other one first: hours on the console. While a set downloads, its first volume is checked at
+  once and its last as soon as it arrives. Headers that cannot be read (no password, a wrong one)
+  leave the reason to the extraction, as before. A last volume cut short (a download stopped early) fails
+  as before, now always named: `... Volume 4 of 4 looks incomplete.`
+
+## Unreleased — extracted file permissions
+
+- Archives extracted in the app (ZIP, 7z, TAR, and RAR when rar-extract cannot start) write folders
+  0777 and files 0666, and every extraction root is 0777, whatever the app's umask. They were 0700
+  and 0600: a game extracted that way and installed by ShadowMount froze the console at launch until
+  its tree was set to 0777 by hand. rar-extract already wrote its files open.
 
 ## Unreleased — verified sandbox roots
 

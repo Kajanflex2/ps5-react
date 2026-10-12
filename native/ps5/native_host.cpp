@@ -6,6 +6,7 @@
 #include "network.hpp"
 #include "archives.hpp"
 #include "packages.hpp"
+#include "removals.hpp"
 #include "browser_capture.hpp"
 #include "lan.hpp"
 #include "render_workers.hpp"
@@ -38,6 +39,7 @@
 #include <EGL/egl.h>
 #include <ps5_opengl_display_modes.h>
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <climits>
 #include <cstdio>
@@ -50,6 +52,7 @@
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 extern "C" {
 #include "er_runtime.h"
@@ -74,6 +77,22 @@ std::size_t archives::pipeline_bytes() {
   hui_heap_stats(&live, &peak, &blocks, &failures);
   const std::size_t ring = size >= 256 * MiB ? 32 * MiB : size >= 192 * MiB ? 16 * MiB : 8 * MiB;
   return live + 64 * MiB + ring + 16 * MiB <= size ? ring : 0;
+}
+// The image caches drop to their low budgets for an in-process extraction (the render thread trims
+// within a frame or two; images on screen stay), then the heap must still hold the decoder budget and
+// the margin. pipeline_bytes() sizes the ring from what is left after the trim.
+bool archives::hold_memory(bool hold) {
+  images::hold_memory(hold);
+  if (!hold) return true;
+  for (int i = 0; i < 25 && images::memory().decoded > images::kLowCacheBytes; ++i) usleep(10'000);
+  constexpr std::size_t MiB = 1024 * 1024;
+  std::size_t size = 0, live = 0, peak = 0, blocks = 0, failures = 0;
+  hui_heap_capacity(&size, nullptr, nullptr);
+  hui_heap_stats(&live, &peak, &blocks, &failures);
+  const bool room = !size || live + 64 * MiB + 16 * MiB <= size;
+  async_log::write("[PS5-REACT] extraction memory: heap=%zu/%zuMiB img decoded=%zuKiB room=%d", live >> 20, size >> 20,
+                   images::memory().decoded >> 10, room);
+  return room;
 }
 bool archives::downloading() { return network::downloading(); }
 // rar-extract.elf goes to the payload loader as the package installer does, and reports on the socket.
@@ -102,6 +121,43 @@ void log_memory() {
   async_log::write("[PS5-REACT] memory: heap=%zu/%zuMiB peak=%zuMiB failed=%zu img encoded=%zuKiB decoded=%zuKiB",
                    live >> 20, size >> 20, peak >> 20, failures, image.encoded >> 10, image.decoded >> 10);
   async_log::write("[PS5-REACT] images: %s", images::stats().c_str());
+}
+
+// A frozen screen on a tester's console says where the render loop hangs: past three seconds without
+// a turn, the log names the loop's phase, the native call it is in and how far script got meanwhile
+// (QuickJS polls its interrupt handler while it runs, so rising js_ticks with no call is a script loop).
+std::atomic<std::int64_t> loop_beat{0};
+std::atomic<const char*> loop_phase{"start"};
+std::atomic<std::uint64_t> js_ticks{0};
+std::atomic<bool> watching{true};
+
+void beat(const char* phase) {
+  loop_phase.store(phase, std::memory_order_relaxed);
+  loop_beat.store(hui::sys::monotonic_us(), std::memory_order_relaxed);
+}
+
+void* watch_loop(void*) {
+  name_thread("stall-watch");
+  std::int64_t stalled_at = 0, next_report = 0;
+  std::uint64_t ticks = 0;
+  while (watching) {
+    usleep(500'000);
+    const std::int64_t now = hui::sys::monotonic_us(), last = loop_beat.load(std::memory_order_relaxed);
+    if (stalled_at && last != stalled_at) {
+      async_log::write("[PS5-REACT] stall: loop turned again after %lldms", static_cast<long long>((last-stalled_at)/1000));
+      stalled_at = 0;
+    }
+    if (now - last < 3'000'000) continue;
+    if (!stalled_at) { stalled_at = last; next_report = now; ticks = js_ticks; }
+    if (now < next_report) continue;
+    const char* call = host::current_call.load();
+    const std::uint64_t seen = js_ticks;
+    async_log::write("[PS5-REACT] stall: loop stuck %llds phase=%s call=%s js_ticks=+%llu",
+                     static_cast<long long>((now-last)/1000000), loop_phase.load(std::memory_order_relaxed),
+                     call ? call : "none", static_cast<unsigned long long>(seen-ticks));
+    ticks = seen; next_report = now + 5'000'000;
+  }
+  return nullptr;
 }
 
 // Unused decoded images kept for scrolling back. Browsing peaks near 110 MiB live with 24 MiB of them
@@ -217,6 +273,7 @@ constexpr std::pair<hui::Action, HostAction> kExtraActions[] = {
   {hui::Action::page_prev, HostAction::l1}, {hui::Action::page_next, HostAction::r1},
   {hui::Action::jump_prev, HostAction::l2}, {hui::Action::jump_next, HostAction::r2},
   {hui::Action::north, HostAction::triangle}, {hui::Action::west, HostAction::square},
+  {hui::Action::menu, HostAction::options},
 };
 
 GamepadState gamepad_state(const hui::InputFrame& input) {
@@ -364,6 +421,13 @@ bool run_proof() {
   }
   if (ok) {
     images::set_cache_bytes(image_cache_bytes());
+    images::set_heap_probe([] {
+      images::Heap heap;
+      std::size_t peak = 0, blocks = 0, failures = 0;
+      hui_heap_stats(&heap.live, &peak, &blocks, &failures);
+      hui_heap_capacity(&heap.size, nullptr, nullptr);
+      return heap;
+    });
     if (network::start()) ps5_react_start_images();
     async_log::write("[PS5-REACT] sound=%d at %lldms", ps5_react_start_sound(), since_launch_ms());
     ErRuntimeConfig config = {};
@@ -396,8 +460,7 @@ bool run_proof() {
   }
   if (ok) {
     // Input failure is logged; timeout still allows the display-only proof to end.
-    async_log::write("[PS5-REACT] Options %s; timeout=%ds after first frame", PS5_REACT_OPTIONS_TO_APP ? "goes to the app" : "closes",
-                     PS5_REACT_TIMEOUT);
+    async_log::write("[PS5-REACT] timeout=%ds after first frame", PS5_REACT_TIMEOUT);
     std::int64_t first_present = 0, previous = hui::sys::monotonic_us(), last_vblank_us = previous;
     // Replaced by the accepted mode after the first frame at a rate: a display without 120 Hz stays at 60.
     int refresh_hz = PS5_REACT_REFRESH_RATE;
@@ -410,6 +473,11 @@ bool run_proof() {
     VirtualPad virtual_pad;
     LiveCommands commands;
     commands.start();
+    beat("start");
+    JS_SetInterruptHandler(JS_GetRuntime(er_runtime_context()),
+                           [](JSRuntime*, void*) { js_ticks.fetch_add(1, std::memory_order_relaxed); return 0; }, nullptr);
+    pthread_t watcher;
+    const bool watcher_started = pthread_create(&watcher, nullptr, watch_loop, nullptr) == 0;
     // A test deploy may lower the slow-frame threshold (milliseconds) with dev/slow-frame-ms.txt.
     std::uint32_t slow_frame_us = 33000;
     if (FILE* file = std::fopen(dev_path("slow-frame-ms.txt").c_str(), "rb")) {
@@ -433,6 +501,7 @@ bool run_proof() {
     }
     while (ok) {
       const std::int64_t now = hui::sys::monotonic_us();
+      beat("input");
       if (now <= 0 || (duration_us > 0 && first_present && now - first_present >= duration_us)) break;
       if (const char* line = stats.start_frame(now)) {
         async_log::write("[PS5-REACT] %s", line);
@@ -468,10 +537,6 @@ bool run_proof() {
       er_set_raster_deferred(true);
       const auto count = pad.read(samples);
       const auto input = tracker.update(std::span<const hui::PadSample>(samples, count), now);
-      if (input.is_pressed(hui::Action::menu)) {
-        if (!PS5_REACT_OPTIONS_TO_APP) break;
-        ok = dispatch(action_name(HostAction::options));
-      }
       pad.tick(static_cast<float>(now - previous) / 1000000.0f);
       host_platform_tick(now);
       if (const char* direction = nav_action(input.nav)) ok = dispatch(direction);
@@ -511,6 +576,7 @@ bool run_proof() {
       if (!ok) break;
       stats.lap(FrameStats::input, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_JS);
+      beat("js");
       er_runtime_pump();
       // The display shows a new frame every vblank, so motion advances by whole vblanks, not by the
       // loop's jittery wall-clock interval.
@@ -524,10 +590,12 @@ bool run_proof() {
         break;
       }
       er_set_raster_deferred(false);
+      beat("commit");
       er_commit();
       if (*er_runtime_last_error()) { ok = false; break; }
       stats.lap(FrameStats::update, hui::sys::monotonic_us());
       er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
+      beat("present");
       int layer_count = 0;
       const ERLayer* layers = er_get_layers(&layer_count);
       presenter.set_layers({layers, static_cast<std::size_t>(layer_count)});
@@ -547,6 +615,7 @@ bool run_proof() {
       const std::size_t repainted = damage_tracker_area();
       damage_tracker_clear();
       stats.lap(FrameStats::present, hui::sys::monotonic_us());
+      beat("swap");
       if (still) {
         const std::int64_t wake = last_vblank_us + (hui::sys::monotonic_us() - last_vblank_us + 1000000 / refresh_hz) /
                                                        (1000000 / refresh_hz) * (1000000 / refresh_hz);
@@ -558,6 +627,7 @@ bool run_proof() {
       }
       stats.lap(FrameStats::swap, hui::sys::monotonic_us());
       if (!ok) break;
+      beat("gc");
       if (const char* line = gc_scheduler.frame(JS_GetRuntime(er_runtime_context()), hui::sys::monotonic_us(),
                                                 repainted, static_cast<std::size_t>(width) * height))
         async_log::write("[PS5-REACT] %s", line);
@@ -566,6 +636,7 @@ bool run_proof() {
         hui::sys::hide_splash_screen();
         async_log::write("[PS5-REACT] first frame presented at %lldms", since_launch_ms());
       }
+      beat("embedded");
       const bool first_at_mode = !mode_known;
       if (first_at_mode) {
         // The accepted mode is known only once a frame has been presented.
@@ -597,6 +668,8 @@ bool run_proof() {
       }
     }
     async_log::write("[PS5-REACT] loop ended ok=%d frames=%llu", ok, static_cast<unsigned long long>(frames));
+    watching = false;
+    if (watcher_started) pthread_join(watcher, nullptr);
     if (profiler.running()) {
       profiler.stop();
       const bool saved = profiler.write(dev_path("profile.folded").c_str());
@@ -610,6 +683,7 @@ bool run_proof() {
   browser_capture::stop();
   lan::stop();
   packages::stop();
+  removals::stop();
   network::stop();
   if (runtime) er_runtime_shutdown();
   text_shaper::shutdown();

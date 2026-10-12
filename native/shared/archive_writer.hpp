@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -41,8 +42,10 @@ public:
   bool append(const void* bytes, std::size_t size, std::uint64_t offset);
   bool end();
   // Waits until every file is written, hashed, synced and closed, appends their receipt lines, and
-  // returns the first error (empty on success or cancellation).
-  std::string finish(std::string& receipt);
+  // returns the first error (empty on success or cancellation). `progress` gets the files synced of the
+  // total once the writes are done and after each fsync, from any of the syncing threads.
+  using Progress = std::function<void(std::size_t synced, std::size_t total)>;
+  std::string finish(std::string& receipt, const Progress& progress = {});
   // The first error, or empty when the job was cancelled.
   std::string error();
 
@@ -60,7 +63,7 @@ private:
   };
   void write_loop();
   // fsyncs the receipt's files from `next` on, one at a time, until none is left or one fails.
-  void sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next);
+  void sync_loop(const std::vector<std::size_t>& lines, std::atomic<std::size_t>& next, std::atomic<std::size_t>& synced_files, const Progress& progress);
   bool push(Command command);
   std::string readback(const std::string& file);
   bool failed() const { return failed_.load() || aborted_.load() || cancelled_.load(); }

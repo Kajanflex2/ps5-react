@@ -25,6 +25,7 @@ std::size_t archives::pipeline_bytes() {
   const char* v = std::getenv("ARCHIVE_PIPELINE_BYTES");
   return v ? std::strtoull(v, nullptr, 10) : 32u << 20;
 }
+bool archives::hold_memory(bool) { return true; }
 
 namespace {
 int open_descriptors() {

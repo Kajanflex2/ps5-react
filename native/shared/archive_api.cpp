@@ -68,6 +68,7 @@ JSValue inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!ok) return JS_ThrowTypeError(ctx,"archives.inspect: source path is not allowed");
     sources.push_back(std::move(file));
   }
+  const host::CallScope scope("archives.inspect");
   const auto inspection = archives::inspect(sources);
   JSValue out = JS_NewObject(ctx);
   JS_SetPropertyStr(ctx,out,"kind",JS_NewString(ctx,inspection.kind.c_str()));
@@ -86,7 +87,11 @@ JSValue poll(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JS_SetPropertyStr(ctx,item,"id",JS_NewUint32(ctx,snapshot.id));
     JS_SetPropertyStr(ctx,item,"state",JS_NewString(ctx,snapshot.state.c_str()));
     JS_SetPropertyStr(ctx,item,"error",JS_NewString(ctx,snapshot.error.c_str()));
+    JS_SetPropertyStr(ctx,item,"phase",JS_NewString(ctx,snapshot.phase.c_str()));
+    JS_SetPropertyStr(ctx,item,"synced",JS_NewFloat64(ctx,snapshot.synced));
+    JS_SetPropertyStr(ctx,item,"syncTotal",JS_NewFloat64(ctx,snapshot.sync_total));
     JS_SetPropertyStr(ctx,item,"written",JS_NewFloat64(ctx,snapshot.written));
+    JS_SetPropertyStr(ctx,item,"total",snapshot.total ? JS_NewFloat64(ctx,snapshot.total) : JS_NULL);
     JS_SetPropertyStr(ctx,item,"entries",JS_NewFloat64(ctx,snapshot.entries));
     JSValue artifacts = JS_NewArray(ctx); std::uint32_t at = 0;
     for (const auto& path : snapshot.artifacts) JS_SetPropertyUint32(ctx,artifacts,at++,JS_NewString(ctx,path.c_str()));

@@ -11,7 +11,8 @@ static bool boundary(unsigned char c) {
 }
 bool browser_match(void *context, const unsigned char *bytes, size_t length) {
     BrowserMatch *match = context;
-    const char *prefix = "https://vikingfile.com/d/";
+    for (size_t which = 0; which < 2; which++) {
+    const char *prefix = browser_capture_prefixes[which];
     const size_t plen = strlen(prefix);
     for (size_t step = 1; step <= 2; step++) {
         for (size_t i = 0; (plen + 1) * step <= length && i <= length - (plen + 1) * step; i++) {
@@ -39,6 +40,7 @@ bool browser_match(void *context, const unsigned char *bytes, size_t length) {
                 candidate[j] = (char)c;
             }
         }
+    }
     }
     return false;
 }

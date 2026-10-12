@@ -1,7 +1,7 @@
 // Copyright (C) 2026 half144 and PS5 React contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Additional attribution term: see LICENSE-ATTRIBUTION.
-// Native API contract (ABI v15) between the hosts and `@ps5-react/core`. The input actions hosts
+// Native API contract (ABI v16) between the hosts and `@ps5-react/core`. The input actions hosts
 // pass to `__ps5ReactDispatch` are a separate contract with its own version (runtime/js/input.js).
 //
 // host_api.cpp (shared) installs `globalThis.__ps5ReactNative` through
@@ -21,6 +21,9 @@
 //   fs.remove(path)                file or empty directory
 //   fs.removeTree(path)            a file, or a directory and everything in it; symbolic links are
 //                                  unlinked, never followed; synchronous, for small app-owned trees
+//   fs.removeAsync(path)           ABI v16; task ID; removes as removeTree does, on a worker thread, in
+//                                  the order asked; a path already gone counts as removed
+//   removals.poll()                [{id, state, error}]; error is the system error; consumes terminal
 //   fs.rename(from, to)
 //   fs.chmod(path, mode)           sets permission bits
 //   fs.mounts()                    [{device, path, type}], visible to the process
@@ -62,7 +65,7 @@
 //                                  a decoder-memory refusal its headers so far justify; partial files ok
 //   archives.cancel(id)            requests cancellation; source volumes remain intact
 //   archives.poll()                state/error/written/entries/artifacts; consumes terminal results
-//   browser.capture(prefix, suffix, timeoutSeconds) ABI v7; filename-bound Vikingfile capture task
+//   browser.capture(prefix, suffix, timeoutSeconds) ABI v7; Vikingfile capture task bound to a filename, or to any file when suffix is "/"
 //   browser.cancel(id)            stops the read-only payload by closing its connection
 //   browser.poll()                state/error/url; consumes terminal results
 //   lan.broadcast(port, message, timeoutMs, maxReplies) ABI v9; task ID; one UDP datagram to
@@ -123,6 +126,7 @@
 // Failures throw a JS Error whose message names the call, the path, and strerror.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -184,6 +188,13 @@ bool read_dir(const char* real_path, void (*visit)(const char* name, void* user)
 bool disk_usage(const char* real_path, double& total, double& free);
 // Records the first use of each native call (PS5: kernel log), to locate native faults.
 void trace(const char* call);
+// The native call running on the render thread, or nullptr: the stall watchdog names it.
+extern std::atomic<const char*> current_call;
+struct CallScope {
+  const char* outer;
+  explicit CallScope(const char* name) : outer(current_call.exchange(name)) {}
+  ~CallScope() { current_call = outer; }
+};
 // Opens the app again once it has closed: PS5 sends relauncher.elf to the payload loader, the desktop
 // preview runs itself again. False with a reason in `error` (at most `size` bytes) when it cannot.
 bool arrange_relaunch(char* error, std::size_t size);

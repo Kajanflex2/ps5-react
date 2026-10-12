@@ -74,6 +74,10 @@ void fail(Job& job, const std::string& error) {
   job.snapshot.error = error;
   job.snapshot.state = job.cancelled ? "cancelled" : "failed";
 }
+void enter(Job& job, const char* phase) {
+  std::lock_guard lock(job.mutex);
+  job.snapshot.phase = phase;
+}
 template <std::size_t count>
 bool has_extension(const std::string& path, const std::array<std::string_view, count>& extensions) {
   return std::any_of(extensions.begin(), extensions.end(), [&](std::string_view extension) { return path.ends_with(extension); });
@@ -111,6 +115,22 @@ bool plain_directory(const std::string& path) {
   struct stat st;
   return !lstat(path.c_str(), &st) && S_ISDIR(st.st_mode);
 }
+// The game runs as another user than this app and cannot launch from a tree only its owner reads, so
+// what an extraction writes is open to everyone whatever this process's umask, as rar-extract's output is.
+// chmod by path: titles already use it (fs.chmod); fchmod is unproven on the console.
+bool make_directory(const std::string& path) {
+  return !mkdir(path.c_str(), 0777) && !chmod(path.c_str(), 0777);
+}
+int create_file(const std::string& path) {
+  const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+  if (fd >= 0 && chmod(path.c_str(), 0666)) {
+    const int error = errno;
+    close(fd);
+    errno = error;
+    return -1;
+  }
+  return fd;
+}
 // Creates the directories of `name` under `root` and returns the path of its last component. `made`
 // holds the directories already created and checked, so a folder of many files costs no syscalls.
 bool make_parents(const std::string& root, const std::string& name, std::string& target, std::unordered_set<std::string>& made) {
@@ -127,7 +147,7 @@ bool make_parents(const std::string& root, const std::string& name, std::string&
     if (part == ".") continue;
     target += "/" + part;
     if (made.contains(target)) continue;
-    if (mkdir(target.c_str(), 0700) && errno != EEXIST) return false;
+    if (!make_directory(target) && errno != EEXIST) return false;
     if (!plain_directory(target)) { errno = ENOTDIR; return false; }
     made.insert(target);
   }
@@ -417,6 +437,11 @@ void use_utf8_names() {
     trace("locale", locale ? locale : "none");
   });
 }
+// The host's memory hold for the libarchive path, released once the archive is freed.
+struct MemoryHold {
+  const bool room = hold_memory(true);
+  ~MemoryHold() { hold_memory(false); }
+};
 archive* open_archive(Job& job, std::string& error, std::unique_ptr<Rar5PasswordReader>& decrypted) {
   const auto& request = job.request;
   use_utf8_names();
@@ -476,11 +501,11 @@ std::string extract(Job& job, archive* archive, const std::string& staging, std:
     if (!make_parents(staging, path, target, made)) return std::strerror(errno);
     if (type == AE_IFDIR) {
       if (made.contains(target)) continue;
-      if (mkdir(target.c_str(), 0700) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
+      if (!make_directory(target) && (errno != EEXIST || !plain_directory(target))) return std::strerror(errno);
       made.insert(target);
       continue;
     }
-    const int fd = open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    const int fd = create_file(target);
     if (fd < 0) return std::strerror(errno);
     std::string digest;
     std::uint32_t crc = 0;
@@ -610,6 +635,14 @@ bool extract_rar(Job& job, const std::string& staging, std::string& receipt, std
         job.snapshot.written = std::min(written, job.request.max_bytes);
       } else if (line.starts_with("f ")) {
         if (const auto refusal = rar_file(job, staging, line.substr(2), total, receipt); !refusal.empty() && error.empty()) error = refusal;
+      } else if (line.starts_with("d ")) {
+        const std::uint64_t declared = std::strtoull(line.c_str() + 2, nullptr, 10);
+        std::lock_guard lock(job.mutex);
+        job.snapshot.total = std::min(declared, job.request.max_bytes);
+      } else if (line == "s" && !cancel_sent) {
+        // Every file is decoded; the worker is writing out and syncing what it still holds.
+        trace("rar worker finishing");
+        enter(job, "finishing");
       } else if (line.starts_with("t ")) {
         timings = line.substr(1);
       } else if (line == "ok" || line == "cancelled" || line.starts_with("fail ")) {
@@ -728,7 +761,7 @@ void run(const std::shared_ptr<Job>& pointer) {
       return;
     }
   }
-  if (mkdir(staging.c_str(), 0700)) {
+  if (!make_directory(staging)) {
     fail(job, std::strerror(errno));
     return;
   }
@@ -755,6 +788,7 @@ void run(const std::shared_ptr<Job>& pointer) {
   {
     std::lock_guard lock(job.mutex);
     job.snapshot.state = "extracting";
+    job.snapshot.phase = "extracting";
   }
   // RAR sets go to rar-extract; everything else, and RAR when the worker cannot start, to libarchive. Only
   // the worker waits for volumes: a streamed set it cannot take fails with nothing written, and the app
@@ -762,8 +796,10 @@ void run(const std::shared_ptr<Job>& pointer) {
   if (request.stream) {
     if (!extract_rar(job, staging, receipt, error) && error.empty()) error = "Extracting while downloading needs the RAR worker.";
   } else if (!rar_volumes(request) || !extract_rar(job, staging, receipt, error)) {
+    const MemoryHold memory;
     std::unique_ptr<Rar5PasswordReader> decrypted;
     auto* archive = open_archive(job, error, decrypted);
+    if (!memory.room) error = no_memory;
     trace("opened", error.c_str());
     {
       // Without the ring or its threads, files are written inline as before.
@@ -775,7 +811,12 @@ void run(const std::shared_ptr<Job>& pointer) {
       if (error.empty()) error = extract(job, archive, staging, receipt, decrypted.get(), pipelined ? &writer : nullptr);
       const auto decoded_us = elapsed_us(started), cpu_us = thread_cpu_us() - cpu_started;
       // On an error or cancel the writer's destructor drops what is queued and closes every file.
-      if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt);
+      if (error.empty() && !job.cancelled) enter(job, "finishing");
+      if (pipelined && error.empty() && !job.cancelled) error = writer.finish(receipt, [&](std::size_t synced, std::size_t total) {
+        std::lock_guard lock(job.mutex);
+        job.snapshot.synced = synced;
+        job.snapshot.sync_total = total;
+      });
       // Where the time went, to tell decoding, the decoder thread not being scheduled (CPU time well under
       // its wall time with little waiting), writes and fsyncs apart on the console.
       const auto& t = job.timings;
@@ -792,6 +833,8 @@ void run(const std::shared_ptr<Job>& pointer) {
     trace("read", error.c_str());
     archive_read_free(archive);
   }
+  // A RAR worker from before the "s" line never said it was finishing.
+  if (error.empty() && !job.cancelled) enter(job, "finishing");
   if (error.empty() && !job.cancelled && request.stream) {
     // Every volume exists now: the receipt names them as a run after the download would.
     const auto full = input_identity(request);

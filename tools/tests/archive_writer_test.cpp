@@ -15,6 +15,7 @@
 #include <vector>
 
 std::size_t archives::pipeline_bytes() { return 0; }
+bool archives::hold_memory(bool) { return true; }
 void archives::trace(const char*, const char*) {}
 bool archives::list_directory(const char*, void (*)(const char*, void*), void*) { return false; }
 
@@ -68,9 +69,16 @@ void round_trip(const std::string& dir, std::mt19937& rng, std::size_t ring) {
     contents.push_back(std::move(data));
   }
   std::string receipt;
-  const auto error = writer.finish(receipt);
+  std::atomic<std::size_t> reports{0}, last_total{0}, most{0};
+  const auto error = writer.finish(receipt, [&](std::size_t synced, std::size_t total) {
+    ++reports;
+    last_total = total;
+    for (auto seen = most.load(); synced > seen && !most.compare_exchange_weak(seen, synced);) {}
+  });
   if (!error.empty()) std::fprintf(stderr, "error: %s\n", error.c_str());
   assert(error.empty() && receipt == expected);
+  // One report before the fsyncs and one after each.
+  assert(reports == std::size_t(files) + 1 && last_total == std::size_t(files) && most == std::size_t(files));
   for (int i = 0; i < files; ++i) {
     assert(slurp(dir + "/f" + std::to_string(i)) == contents[i]);
     unlink((dir + "/f" + std::to_string(i)).c_str());
