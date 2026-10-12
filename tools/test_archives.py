@@ -314,10 +314,22 @@ def main():
    single=root/(name+".rar");single.write_bytes(blob)
    assert run(name,[single])[0]=="completed"
    assert (root/name/"game.bin").read_bytes()==DATA
-  single=root/"rar4-single-cut.rar";single.write_bytes(plain_rar4("game.bin",DATA,end=False)[:-100])
-  assert worker([single])==["ready","fail "+NO_LAST]
-  single=root/"rar5-single-cut.rar";single.write_bytes(encrypted_rar5(DATA)[0][:-100])
+  # A RAR5 volume without an end block that is whole was not the last one.
+  single=root/"rar5-single-no-end.rar";single.write_bytes(encrypted_rar5(DATA,headers=False)[0][:-8])
   assert worker([single],"DLPSGAME.COM")==["ready","fail "+NO_LAST]
+  # A last volume cut short (a download stopped early) is not a missing one: it fails as before, named, so
+  # the app downloads that volume again. Cut in its data, in a header, and in the end block.
+  for name,parts,password in [("rar5-encrypted",real,"fixture-password"),("rar4-encrypted",rar4,"fixture-password"),("rar5-open-headers",rar5_open,"DLPSGAME.COM")]:
+   for cut in (len(parts[-1].read_bytes())//2,40,3):
+    copy=root/f"{name}-cut-{cut}";copy.write_bytes(parts[-1].read_bytes()[:-cut])
+    result=run(f"{name}-cut-last-{cut}",[*parts[:-1],copy],password=password)
+    # Losing only the end block may still leave every file whole, its checksum verified.
+    named=result[0]=="failed" and result[-1].endswith(f"Volume {len(parts)} of {len(parts)} looks incomplete.")
+    assert named or (result[0]=="completed" and cut<64),(name,cut,result)
+  single=root/"rar4-single-cut.rar";single.write_bytes(plain_rar4("game.bin",DATA,end=False)[:-100])
+  result=run("rar4-single-cut",[single]);assert result[0]=="failed" and result[-1]!=NO_LAST,result
+  single=root/"rar5-single-cut.rar";single.write_bytes(encrypted_rar5(DATA)[0][:-100])
+  result=run("rar5-single-cut",[single],password="DLPSGAME.COM");assert result[0]=="failed" and result[-1]!=NO_LAST,result
   # Real archive split byte stream: ordered volumes, no temporary joined copy.
   blob=tar.read_bytes();parts=[]
   for i in range(3):

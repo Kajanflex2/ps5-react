@@ -3,12 +3,13 @@
 ## Unreleased — RAR sets checked before decoding
 
 - rar-extract reads the end block of a set's last volume and the header of its first before decoding,
-  headers decrypted with the set's password. A last volume that says more follow (or has no end) fails
-  at once with `Incomplete RAR archive or missing volume.`, a first one that is not the first with
+  headers decrypted with the set's password. A whole last volume that says more follow (or, in RAR5, has
+  no end) fails at once with `Incomplete RAR archive or missing volume.`, a first one that is not the first with
   `Missing first RAR volume.`, both without the volume suffix. A set lacking its last volume decoded
   every other one first: hours on the console. While a set downloads, its first volume is checked at
   once and its last as soon as it arrives. Headers that cannot be read (no password, a wrong one)
-  leave the reason to the extraction, as before.
+  leave the reason to the extraction, as before. A last volume cut short (a download stopped early) fails
+  as before, now always named: `... Volume 4 of 4 looks incomplete.`
 
 ## Unreleased — extracted file permissions
 

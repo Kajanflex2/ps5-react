@@ -393,7 +393,7 @@ struct Session {
   Writer writer;
   // `reading` is the index of the volume UnRAR is reading, the count of them once it wants one past the last.
   size_t next_volume = 1, reading = 0;
-  bool writing = false, missing_volume = false, missing_password = false, last_checked = false;
+  bool writing = false, missing_volume = false, missing_password = false, last_checked = false, last_cut = false;
   const Archive* archive = nullptr;
   uint64 written = 0, last_report = 0;
   std::string error;
@@ -637,10 +637,11 @@ uint64 declared_total(const Options& options) {
 }
 
 // The volume to blame for a set that ended early or failed its checksum, 1-based, or 0 when none stands
-// out. A set's volumes are all one size but the last, so a shorter one was cut off; otherwise, for an
-// early end, the volume UnRAR was reading.
+// out: the last if its headers run past its end; else, as a set's volumes are all one size but the last, a
+// shorter one, cut off; otherwise, for an early end, the volume UnRAR was reading.
 size_t suspect_volume(const Session& session, bool early_end) {
   const auto& sources = session.options.sources;
+  if (session.last_cut) return sources.size();
   std::vector<uint64> sizes;
   for (const auto& path : sources) {
     struct stat st;
@@ -653,9 +654,10 @@ size_t suspect_volume(const Session& session, bool early_end) {
 }
 
 // What a volume's own headers say about its place in the set. Not known when they cannot be read for a
-// reason the extraction names better: no password, a wrong one, not a RAR volume.
+// reason the extraction names better: no password, a wrong one, not a RAR volume. `whole` once every
+// header and entry fits in the file: a volume cut short says nothing about what follows it.
 struct Place {
-  bool known = false, first = true, last = true;
+  bool known = false, whole = false, first = true, last = true;
 };
 
 Place place_of(const Options& options, const std::string& path) {
@@ -686,8 +688,12 @@ Place place_of(const Options& options, const std::string& path) {
         }
         archive.SeekToNext();
       }
-      if (!archive.FailedHeaderDecryption) {
+      // RAR4 has no password check: a header cut short fails to decrypt as with a wrong password, but only
+      // after the right one decrypted the entries before it.
+      if (!archive.FailedHeaderDecryption || entries) {
         place.known = true;
+        // Reading stops at the end block, or where no whole header is left: the file's end if nothing is cut.
+        place.whole = !archive.BrokenHeader && entry_end <= archive.FileLength() && (ended || archive.CurBlockPos >= archive.FileLength());
         if (archive.Format == RARFMT50) {
           place.first = !archive.Volume || archive.VolNumber == 0;
           place.last = ended && !archive.EndArcHead.NextVolume;
@@ -695,9 +701,8 @@ Place place_of(const Options& options, const std::string& path) {
           // RAR 2.x volumes have no first volume flag; RAR 3 and later ones number themselves in their end block.
           const bool numbered = ended && archive.EndArcHead.StoreVolNumber && archive.EndArcHead.VolNumber;
           place.first = !archive.Volume || (archive.MainHead.Flags & MHD_FIRSTVOLUME) || !(split_before || numbered);
-          // Without an end block (RAR 2.x, or "-en"), the last entry tells: whole, and not continued.
-          place.last = ended ? !archive.EndArcHead.NextVolume
-                             : entries && !split_after && !archive.BrokenHeader && entry_end <= archive.FileLength();
+          // Without an end block (RAR 2.x, or "-en"), the last entry tells.
+          place.last = ended ? !archive.EndArcHead.NextVolume : entries && !split_after;
         }
       }
     }
@@ -707,15 +712,17 @@ Place place_of(const Options& options, const std::string& path) {
   return place;
 }
 
-// A set that lacks its last volume, or ends in one cut short, would otherwise fail only once every other
-// volume is decoded, hours later on the console. A streamed set's last volume is checked once it is there.
+// A set that lacks its last volume would otherwise fail only once every other volume is decoded, hours later
+// on the console. A last volume cut short fails as before, named, so that one is downloaded again. A
+// streamed set's last volume is checked once it is there.
 void check_last(Session& session) {
   const std::string& path = session.options.sources.back();
   struct stat st;
   if (session.last_checked || (session.options.wait && (lstat(path.c_str(), &st) || !S_ISREG(st.st_mode) || !st.st_size))) return;
   session.last_checked = true;
   const Place place = place_of(session.options, path);
-  if (place.known && !place.last) session.error = describe(ERAR_EOPEN);
+  session.last_cut = place.known && !place.whole;
+  if (place.known && place.whole && !place.last) session.error = describe(ERAR_EOPEN);
 }
 
 void check_first(Session& session) {
@@ -807,8 +814,9 @@ int main() {
       else if (session.missing_volume) error = describe(ERAR_EOPEN);
     }
     // Which volume, so that one alone is downloaded again: "... Volume 6 of 12 looks incomplete." A volume
-    // check's reason stands as it is.
-    const bool early_end = error == describe(ERAR_EOPEN) || error == describe(ERAR_EREAD);
+    // check's reason stands as it is. A last volume cut in its end block fails with no more precise reason.
+    const bool early_end = error == describe(ERAR_EOPEN) || error == describe(ERAR_EREAD) ||
+                           (session.last_cut && error == describe(ERAR_UNKNOWN));
     if (!cancelled && session.error.empty() && session.options.sources.size() > 1 && (early_end || error == describe(ERAR_BAD_DATA)))
       if (const size_t volume = suspect_volume(session, early_end))
         error += " Volume " + std::to_string(volume) + " of " + std::to_string(session.options.sources.size()) + " looks incomplete.";
