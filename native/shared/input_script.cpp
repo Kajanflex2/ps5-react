@@ -189,13 +189,12 @@ std::uint32_t VirtualPad::merge(GamepadState& state, std::uint64_t now_ms) {
   return pressed;
 }
 
-const char* VirtualPad::action(std::size_t index, bool options_to_app) {
+const char* VirtualPad::action(std::size_t index) {
   // Indexed like kButtonNames; nullptr for buttons without an action.
   constexpr const char* kActions[] = {
     "up", "down", "left", "right", "confirm", "back", "triangle", "square", "l1", "r1", "l2", "r2",
     nullptr, nullptr, "options", nullptr,
   };
   static_assert(std::size(kActions) == std::size(kButtonNames));
-  if (index >= std::size(kActions) || (index == 14 && !options_to_app)) return nullptr;
-  return kActions[index];
+  return index < std::size(kActions) ? kActions[index] : nullptr;
 }

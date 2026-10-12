@@ -91,10 +91,10 @@
 
 ## Unreleased — Options for apps
 
-- `"optionsButton": "app"` in `app.json` hands Options (Escape and a controller's Start on the
-  desktop) to the app as the `options` action (input protocol v4), for `FocusScope.onAction` and
-  `useController`, instead of closing it; the PS button leaves. The default, `"exit"`, keeps the
-  host's exit.
+- Options reaches every app as the `options` action, as upstream now delivers it (O and a
+  controller's Start on the desktop); the PS button leaves, Escape on the desktop. The
+  `"optionsButton"` app.json setting this fork added for the same is gone: an app that sets it
+  builds as before, and the key is ignored.
 
 ## Unreleased — resolution auto
 

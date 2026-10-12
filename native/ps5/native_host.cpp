@@ -570,7 +570,7 @@ bool run_proof() {
       // A scripted hold presses like the controller: the button's action, once.
       for (std::uint32_t pressed = virtual_pad.merge(state, static_cast<std::uint64_t>(now / 1000)), i = 0; ok && pressed;
            pressed >>= 1, ++i) {
-        if (const char* held = pressed & 1 ? VirtualPad::action(i, PS5_REACT_OPTIONS_TO_APP) : nullptr) ok = dispatch(held);
+        if (const char* held = pressed & 1 ? VirtualPad::action(i) : nullptr) ok = dispatch(held);
       }
       ps5_react_set_gamepad(state);
       if (!ok) break;

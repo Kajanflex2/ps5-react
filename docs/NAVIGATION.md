@@ -72,10 +72,9 @@ delivers `previous` (after `up`/`left`) and `next` (after `down`/`right`) to
 `useController` handlers only. Both hosts and input scripts take the names from
 `native/shared/actions.hpp`.
 
-Options (Escape on desktop) closes the app, unless `app.json` sets
-`"optionsButton": "app"`. Then, since input protocol v4, it arrives as the `options`
-action like the buttons above, and the PS button is how the user leaves. A media app
-uses it for its settings, as the system apps do.
+Options (O on desktop) is an action like the buttons above; the PS button (Escape on
+desktop) is how the user leaves. A media app uses Options for its settings, as the
+system apps do.
 
 Since input protocol v5, hosts also report the touchpad's first finger: `__ps5ReactTouch(x, y)`
 with its position 0..1 across and down the pad each frame it touches, and `__ps5ReactTouch(null)`
@@ -508,8 +507,7 @@ useEffect(() => {
 }, [playing]);
 ```
 
-`BackHandler.exitApp()` quits explicitly. Options (Escape on desktop) exits through the host
-unless the app takes it as an action (`"optionsButton": "app"`).
+`BackHandler.exitApp()` quits explicitly; the PS button (Escape on desktop) leaves through the host.
 
 ## Custom focusable components
 

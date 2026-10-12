@@ -291,8 +291,8 @@ Menus use focus navigation ([NAVIGATION.md](NAVIGATION.md)). `useController`
 receives the raw `up`, `down`, `left`, `right`, `confirm`, `back`, `l1`, `r1`,
 `l2`, `r2`, `triangle`, and `square` actions (plus `previous`/`next` for
 compatibility); `useControllerEvents` is for releases, holds and analog travel,
-and `useGamepad` for drawing raw state. Options exits through the host, unless `app.json` has `"optionsButton": "app"`: then
-it arrives as the `options` action ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v5)).
+and `useGamepad` for drawing raw state. Options arrives as the `options` action, and the PS button
+leaves the app ([NAVIGATION.md](NAVIGATION.md#host-input-input-protocol-v5)).
 
 ## Sound
 

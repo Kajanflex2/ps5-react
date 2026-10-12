@@ -51,9 +51,8 @@ public:
   // Adds what is held at `now_ms` to `state`; returns the buttons that went down since the last call
   // (bit i: kButtonNames[i]), for the host to dispatch their actions.
   std::uint32_t merge(GamepadState& state, std::uint64_t now_ms);
-  // The action a press of kButtonNames[index] dispatches, or nullptr: none for L3, R3 and the
-  // touchpad, and Options only for apps that take it.
-  static const char* action(std::size_t index, bool options_to_app);
+  // The action a press of kButtonNames[index] dispatches, or nullptr: none for L3, R3 and the touchpad.
+  static const char* action(std::size_t index);
 
 private:
   struct Hold { float value = 0; std::uint64_t until = 0; }; // until 0: until changed

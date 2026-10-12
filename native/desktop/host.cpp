@@ -76,11 +76,11 @@ constexpr std::pair<SDL_Keycode, HostAction> kKeyActions[] = {
   {SDLK_t, HostAction::triangle}, {SDLK_f, HostAction::square}, {SDLK_o, HostAction::options},
 };
 // The keys' GamepadState buttons (kButtonNames indexes). Z and C are L2 and R2: full travel, or a light
-// press (kLightTravel, short of the half-travel press) while Shift is down. P is the touchpad.
+// press (kLightTravel, short of the half-travel press) while Shift is down. O is Options, P the touchpad.
 constexpr std::pair<SDL_Scancode, int> kKeyButtons[] = {
   {SDL_SCANCODE_UP, 0}, {SDL_SCANCODE_DOWN, 1}, {SDL_SCANCODE_LEFT, 2}, {SDL_SCANCODE_RIGHT, 3},
   {SDL_SCANCODE_RETURN, 4}, {SDL_SCANCODE_SPACE, 4}, {SDL_SCANCODE_BACKSPACE, 5}, {SDL_SCANCODE_T, 6},
-  {SDL_SCANCODE_F, 7}, {SDL_SCANCODE_Q, 8}, {SDL_SCANCODE_E, 9}, {SDL_SCANCODE_ESCAPE, 14}, {SDL_SCANCODE_P, 15},
+  {SDL_SCANCODE_F, 7}, {SDL_SCANCODE_Q, 8}, {SDL_SCANCODE_E, 9}, {SDL_SCANCODE_O, 14}, {SDL_SCANCODE_P, 15},
 };
 constexpr float kLightTravel = 0.4f;
 
@@ -424,11 +424,8 @@ struct Host {
       // The host repeats held directions itself, so OS key repeats are ignored.
       if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         const SDL_Scancode key = event.key.keysym.scancode;
-        // Escape stands for Options: it exits, unless the app takes Options as an action.
-        if (event.key.keysym.sym == SDLK_ESCAPE) {
-          if (PS5_REACT_OPTIONS_TO_APP) action = action_name(HostAction::options);
-          else running = false;
-        }
+        // Escape stands for the PS button: it leaves. O is Options.
+        if (event.key.keysym.sym == SDLK_ESCAPE) running = false;
         for (const auto& [code, mapped] : kKeyActions) {
           if (code == event.key.keysym.sym) action = repeats(mapped) ? hold(action_name(mapped), key) : action_name(mapped);
         }
@@ -438,7 +435,6 @@ struct Host {
           if (code == button)
             action = repeats(mapped) ? hold(action_name(mapped), SDL_SCANCODE_UNKNOWN, button) : action_name(mapped);
         }
-        if (PS5_REACT_OPTIONS_TO_APP && button == SDL_CONTROLLER_BUTTON_START) action = action_name(HostAction::options);
       } else if ((event.type == SDL_CONTROLLERTOUCHPADDOWN || event.type == SDL_CONTROLLERTOUCHPADMOTION ||
                   event.type == SDL_CONTROLLERTOUCHPADUP) && event.ctouchpad.touchpad == 0 && event.ctouchpad.finger == 0) {
         if (!touch(event.type != SDL_CONTROLLERTOUCHPADUP, event.ctouchpad.x, event.ctouchpad.y)) return false;
@@ -470,7 +466,7 @@ struct Host {
     GamepadState state = read_gamepad(controller);
     // What a tool holds presses like the controller: the buttons' actions, once (directions do not repeat).
     for (std::uint32_t pressed = virtual_pad.merge(state, SDL_GetTicks64()), i = 0; pressed; pressed >>= 1, ++i) {
-      const char* held = pressed & 1 ? VirtualPad::action(i, PS5_REACT_OPTIONS_TO_APP) : nullptr;
+      const char* held = pressed & 1 ? VirtualPad::action(i) : nullptr;
       if (held && !dispatch(held)) return false;
     }
     ps5_react_set_gamepad(state);

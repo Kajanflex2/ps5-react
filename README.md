@@ -91,7 +91,8 @@ Refresh.** The first run fetches and builds pinned dependencies when needed.
 | Move focus | Arrow keys | D-pad |
 | Activate focused element | Enter | Cross |
 | Navigate back | Backspace | Circle |
-| Exit application | Escape | Options (unless `"optionsButton": "app"`) |
+| Options (the `options` action) | O | Options |
+| Exit application | Escape | PS button |
 | Stop the development watcher | Ctrl+C in the terminal | — |
 
 The starter exits automatically 30 seconds after its first displayed frame.
